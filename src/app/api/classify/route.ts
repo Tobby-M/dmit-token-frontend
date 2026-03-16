@@ -14,6 +14,88 @@ const classifyRequestSchema = z.object({
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("status" in error)) {
+    return null;
+  }
+
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function isRetryableClassificationError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+
+  return (
+    message.startsWith("Low confidence classification") ||
+    message === "Model did not return a function call." ||
+    message.startsWith("Invalid finger from model:") ||
+    message.startsWith("Invalid type from model:")
+  );
+}
+
+function isLowConfidenceError(error: unknown): boolean {
+  return getErrorMessage(error).startsWith("Low confidence classification");
+}
+
+function getClassifierErrorResponse(error: unknown): NextResponse {
+  const message = getErrorMessage(error);
+  const status = getErrorStatus(error);
+
+  if (isLowConfidenceError(error)) {
+    return NextResponse.json(
+      {
+        error: "Could not classify confidently.",
+        recaptureRequired: true,
+        details: message
+      },
+      { status: 422 }
+    );
+  }
+
+  if (message === "GEMINI_API_KEY is not configured.") {
+    return NextResponse.json(
+      {
+        error: "Gemini API key is not configured.",
+        details: "Set GEMINI_API_KEY in your environment before analyzing a scan."
+      },
+      { status: 500 }
+    );
+  }
+
+  if (status === 401 || status === 403 || /PERMISSION_DENIED|API key/i.test(message)) {
+    return NextResponse.json(
+      {
+        error: "Gemini API request was rejected.",
+        details: "The configured GEMINI_API_KEY is invalid or has been revoked. Rotate it and restart the app."
+      },
+      { status: 502 }
+    );
+  }
+
+  if (/model/i.test(message) && /not found|unsupported|unknown|unavailable/i.test(message)) {
+    return NextResponse.json(
+      {
+        error: "Gemini model is unavailable.",
+        details: "Use a supported multimodal model such as gemini-2.5-flash."
+      },
+      { status: 502 }
+    );
+  }
+
+  return NextResponse.json(
+    {
+      error: "Classification service failed.",
+      details: message
+    },
+    { status: 502 }
+  );
+}
+
 function getImageExtension(mimeType: string): string {
   switch (mimeType) {
     case "image/png":
@@ -56,7 +138,7 @@ async function classifyWithRetry(args: {
   tempImagePath: string;
   mimeType: string;
 }): Promise<Awaited<ReturnType<typeof classifyFingerprint>>> {
-  const model = process.env.GEMINI_MODEL ?? "gemma-3-27b-it";
+  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
 
   try {
     return await classifyFingerprint({
@@ -65,7 +147,11 @@ async function classifyWithRetry(args: {
       capturedImageMimeType: args.mimeType,
       model
     });
-  } catch {
+  } catch (error) {
+    if (!isRetryableClassificationError(error)) {
+      throw error;
+    }
+
     return await classifyFingerprint({
       selectedFinger: args.selectedFinger,
       capturedImagePath: args.tempImagePath,
@@ -112,14 +198,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         tempImagePath: persisted.filePath
       });
     } catch (error) {
-      return NextResponse.json(
-        {
-          error: "Could not classify confidently.",
-          recaptureRequired: true,
-          details: error instanceof Error ? error.message : "Unknown error"
-        },
-        { status: 422 }
-      );
+      return getClassifierErrorResponse(error);
     }
 
     if (classification.finger !== parsed.selectedFinger) {
