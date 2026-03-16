@@ -14,6 +14,15 @@ const classifyRequestSchema = z.object({
 
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
+function logRoute(
+  level: "info" | "warn" | "error",
+  message: string,
+  details?: Record<string, unknown>
+): void {
+  const payload = details ? ` ${JSON.stringify(details)}` : "";
+  console[level](`[dmit:route] ${message}${payload}`);
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
@@ -134,25 +143,56 @@ async function persistUploadedImageTemp(file: File): Promise<{ filePath: string;
 }
 
 async function classifyWithRetry(args: {
+  requestId: string;
   selectedFinger: DemoFinger;
   tempImagePath: string;
   mimeType: string;
 }): Promise<Awaited<ReturnType<typeof classifyFingerprint>>> {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
 
+  logRoute("info", "Starting classification attempt", {
+    requestId: args.requestId,
+    selectedFinger: args.selectedFinger,
+    mimeType: args.mimeType,
+    tempImagePath: args.tempImagePath,
+    model,
+    attemptLabel: "initial",
+    minConfidence: 0.55
+  });
+
   try {
     return await classifyFingerprint({
+      requestId: args.requestId,
+      attemptLabel: "initial",
       selectedFinger: args.selectedFinger,
       capturedImagePath: args.tempImagePath,
       capturedImageMimeType: args.mimeType,
       model
     });
   } catch (error) {
+    logRoute("warn", "Initial classification attempt failed", {
+      requestId: args.requestId,
+      error: getErrorMessage(error),
+      status: getErrorStatus(error),
+      retryable: isRetryableClassificationError(error)
+    });
+
     if (!isRetryableClassificationError(error)) {
       throw error;
     }
 
+    logRoute("info", "Retrying classification with lower confidence threshold", {
+      requestId: args.requestId,
+      selectedFinger: args.selectedFinger,
+      mimeType: args.mimeType,
+      model,
+      attemptLabel: "retry-low-threshold",
+      minConfidence: 0.45
+    });
+
     return await classifyFingerprint({
+      requestId: args.requestId,
+      attemptLabel: "retry-low-threshold",
       selectedFinger: args.selectedFinger,
       capturedImagePath: args.tempImagePath,
       capturedImageMimeType: args.mimeType,
@@ -165,10 +205,20 @@ async function classifyWithRetry(args: {
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const requestId = randomUUID();
   let tempImagePath: string | null = null;
+  const startedAt = Date.now();
+
+  logRoute("info", "Received classify request", {
+    requestId,
+    method: request.method,
+    contentType: request.headers.get("content-type"),
+    userAgent: request.headers.get("user-agent")
+  });
 
   try {
     await validateDatasetAvailability();
+    logRoute("info", "Dataset availability check passed", { requestId });
 
     const form = await request.formData();
     const parsed = classifyRequestSchema.parse({
@@ -177,10 +227,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const image = form.get("image");
     if (!(image instanceof File)) {
+      logRoute("warn", "Request missing fingerprint image", { requestId });
       return NextResponse.json({ error: "Fingerprint image file is required." }, { status: 400 });
     }
 
+    logRoute("info", "Parsed classify form data", {
+      requestId,
+      selectedFinger: parsed.selectedFinger,
+      imageName: image.name,
+      imageType: image.type,
+      imageSize: image.size
+    });
+
     if (!isDemoFinger(parsed.selectedFinger)) {
+      logRoute("warn", "Unsupported finger submitted", {
+        requestId,
+        selectedFinger: parsed.selectedFinger
+      });
       return NextResponse.json(
         { error: "Unsupported finger for demo." },
         { status: 400 }
@@ -190,18 +253,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const persisted = await persistUploadedImageTemp(image);
     tempImagePath = persisted.filePath;
 
+    logRoute("info", "Persisted uploaded fingerprint to temp file", {
+      requestId,
+      tempImagePath: persisted.filePath,
+      mimeType: persisted.mimeType
+    });
+
     let classification;
     try {
       classification = await classifyWithRetry({
+        requestId,
         selectedFinger: parsed.selectedFinger,
         mimeType: persisted.mimeType,
         tempImagePath: persisted.filePath
       });
     } catch (error) {
+      logRoute("error", "Classification failed", {
+        requestId,
+        error: getErrorMessage(error),
+        status: getErrorStatus(error)
+      });
       return getClassifierErrorResponse(error);
     }
 
+    logRoute("info", "Classification returned from Gemini", {
+      requestId,
+      classification
+    });
+
     if (classification.finger !== parsed.selectedFinger) {
+      logRoute("warn", "Finger mismatch after classification", {
+        requestId,
+        selectedFinger: parsed.selectedFinger,
+        classifiedFinger: classification.finger,
+        type: classification.type,
+        confidence: classification.confidence
+      });
       return NextResponse.json(
         {
           error: "Finger mismatch detected. Please recapture the selected finger.",
@@ -213,12 +300,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const report = await loadReport(classification.finger, classification.type);
 
+    logRoute("info", "Loaded report for classification", {
+      requestId,
+      finger: classification.finger,
+      type: classification.type,
+      elapsedMs: Date.now() - startedAt
+    });
+
     return NextResponse.json({
       ok: true,
       classification,
       report
     });
   } catch (error) {
+    logRoute("error", "Unhandled classify route failure", {
+      requestId,
+      error: getErrorMessage(error),
+      status: getErrorStatus(error),
+      elapsedMs: Date.now() - startedAt
+    });
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Unexpected server error"
@@ -227,7 +327,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   } finally {
     if (tempImagePath) {
-      await fs.unlink(tempImagePath).catch(() => undefined);
+      await fs.unlink(tempImagePath)
+        .then(() => {
+          logRoute("info", "Deleted temp fingerprint file", {
+            requestId,
+            tempImagePath
+          });
+        })
+        .catch((error) => {
+          logRoute("warn", "Failed to delete temp fingerprint file", {
+            requestId,
+            tempImagePath,
+            error: getErrorMessage(error)
+          });
+        });
     }
+
+    logRoute("info", "Classify request finished", {
+      requestId,
+      elapsedMs: Date.now() - startedAt
+    });
   }
 }

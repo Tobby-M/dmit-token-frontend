@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { createPartFromUri, GoogleGenAI, Type } from "@google/genai";
 import { z } from "zod";
 import {
@@ -33,13 +34,45 @@ interface UploadedReferenceImage {
 
 let uploadedReferenceImagesPromise: Promise<UploadedReferenceImage[]> | null = null;
 
+function serializeForLog(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return inspect(value, {
+      depth: 8,
+      breakLength: 120,
+      compact: false
+    });
+  }
+}
+
+function logClassifier(
+  level: "info" | "warn" | "error",
+  message: string,
+  details?: Record<string, unknown>
+): void {
+  const payload = details ? ` ${serializeForLog(details)}` : "";
+  console[level](`[dmit:classifier] ${message}${payload}`);
+}
+
 async function getUploadedReferenceImages(client: GoogleGenAI): Promise<UploadedReferenceImage[]> {
   if (!uploadedReferenceImagesPromise) {
     uploadedReferenceImagesPromise = (async () => {
       const files = getReferenceFingerprintFiles();
       const uploaded: UploadedReferenceImage[] = [];
 
+      logClassifier("info", "Uploading reference fingerprints", {
+        referenceCount: files.length,
+        types: files.map((file) => file.type)
+      });
+
       for (const reference of files) {
+        logClassifier("info", "Uploading reference fingerprint", {
+          type: reference.type,
+          path: reference.path,
+          mimeType: reference.mimeType
+        });
+
         const uploadedFile = await client.files.upload({
           file: reference.path,
           config: {
@@ -56,7 +89,17 @@ async function getUploadedReferenceImages(client: GoogleGenAI): Promise<Uploaded
           uri: uploadedFile.uri,
           mimeType: uploadedFile.mimeType
         });
+
+        logClassifier("info", "Uploaded reference fingerprint", {
+          type: reference.type,
+          uri: uploadedFile.uri,
+          mimeType: uploadedFile.mimeType
+        });
       }
+
+      logClassifier("info", "Reference fingerprint upload complete", {
+        uploadedCount: uploaded.length
+      });
 
       return uploaded;
     })();
@@ -66,6 +109,9 @@ async function getUploadedReferenceImages(client: GoogleGenAI): Promise<Uploaded
     return await uploadedReferenceImagesPromise;
   } catch (error) {
     uploadedReferenceImagesPromise = null;
+    logClassifier("error", "Reference fingerprint upload failed", {
+      error: serializeForLog(error)
+    });
     throw error;
   }
 }
@@ -130,6 +176,8 @@ export async function classifyFingerprint(args: {
   capturedImageMimeType: string;
   model: string;
   minConfidence?: number;
+  requestId?: string;
+  attemptLabel?: string;
 }): Promise<ClassificationResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -137,7 +185,21 @@ export async function classifyFingerprint(args: {
   }
 
   const minConfidence = args.minConfidence ?? 0.55;
+  const requestId = args.requestId ?? "no-request-id";
+  const attemptLabel = args.attemptLabel ?? "initial";
   const client = new GoogleGenAI({ apiKey });
+  const startedAt = Date.now();
+
+  logClassifier("info", "Starting Gemini classification", {
+    requestId,
+    attemptLabel,
+    selectedFinger: args.selectedFinger,
+    capturedImagePath: args.capturedImagePath,
+    capturedImageMimeType: args.capturedImageMimeType,
+    model: args.model,
+    minConfidence
+  });
+
   const referenceImages = await getUploadedReferenceImages(client);
   if (referenceImages.length !== TYPE_CODES.length) {
     throw new Error(
@@ -145,6 +207,19 @@ export async function classifyFingerprint(args: {
     );
   }
 
+  logClassifier("info", "Reference fingerprints ready", {
+    requestId,
+    attemptLabel,
+    referenceCount: referenceImages.length,
+    types: referenceImages.map((image) => image.type)
+  });
+
+  logClassifier("info", "Uploading captured fingerprint", {
+    requestId,
+    attemptLabel,
+    capturedImagePath: args.capturedImagePath,
+    mimeType: args.capturedImageMimeType
+  });
   const capturedFile = await client.files.upload({
     file: args.capturedImagePath,
     config: {
@@ -155,6 +230,13 @@ export async function classifyFingerprint(args: {
   if (!capturedFile.uri || !capturedFile.mimeType) {
     throw new Error("Failed to upload captured fingerprint image.");
   }
+
+  logClassifier("info", "Captured fingerprint uploaded", {
+    requestId,
+    attemptLabel,
+    uri: capturedFile.uri,
+    mimeType: capturedFile.mimeType
+  });
 
   const functionDeclaration = {
     name: "select_dmit_type",
@@ -239,15 +321,53 @@ export async function classifyFingerprint(args: {
     }
   });
 
+  logClassifier("info", "Gemini raw response received", {
+    requestId,
+    attemptLabel,
+    elapsedMs: Date.now() - startedAt,
+    response
+  });
+
   const functionArgs = parseFunctionCallArgs(response);
   if (!functionArgs) {
+    logClassifier("warn", "Gemini response missing function call", {
+      requestId,
+      attemptLabel,
+      response
+    });
     throw new Error("Model did not return a function call.");
   }
 
+  logClassifier("info", "Gemini function call args parsed", {
+    requestId,
+    attemptLabel,
+    functionArgs
+  });
+
   const result = validateArgs(functionArgs);
+  logClassifier("info", "Gemini classification validated", {
+    requestId,
+    attemptLabel,
+    classification: result
+  });
+
   if (result.confidence < minConfidence) {
+    logClassifier("warn", "Gemini classification below confidence threshold", {
+      requestId,
+      attemptLabel,
+      confidence: result.confidence,
+      minConfidence,
+      classification: result
+    });
     throw new Error(`Low confidence classification (${result.confidence.toFixed(2)}).`);
   }
+
+  logClassifier("info", "Gemini classification succeeded", {
+    requestId,
+    attemptLabel,
+    elapsedMs: Date.now() - startedAt,
+    classification: result
+  });
 
   return result;
 }
