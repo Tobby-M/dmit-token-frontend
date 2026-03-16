@@ -1,0 +1,17 @@
+{
+  "name": "DMIT Scan Demo",
+  "short_name": "DMIT Demo",
+  "description": "Phone-first DMIT scan demo for 4 fingers",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f2ea",
+  "theme_color": "#f5f2ea",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
