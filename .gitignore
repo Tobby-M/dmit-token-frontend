@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# next build output
+.next/
+out/
+
+# env files
+.env*
+
+# generated PWA files
+public/sw.js
+public/workbox-*.js
+public/fallback-*.js
+
+# misc
+.DS_Store
+*.log
+*.tsbuildinfo
