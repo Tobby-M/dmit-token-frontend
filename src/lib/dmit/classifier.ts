@@ -295,7 +295,7 @@ export async function classifyFingerprint(args: {
         "1) Compare ridge flow and core/delta structure of PART 2 against PART 3.",
         "2) Choose exactly one type from the allowed type values.",
         "3) Do not change finger; echo the selected finger exactly.",
-        "4) Confidence must be a number between 0 and 1.",
+        "4) Confidence must be a number between 0 and 1. If you are entirely unsure, you MUST STILL make your best guess! Never fail to output a classification.",
         "5) notes must be concise and evidence-based.",
         "Return output only via the select_dmit_type function call.",
         "Reference label order (10 images below):",

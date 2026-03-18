@@ -190,15 +190,45 @@ async function classifyWithRetry(args: {
       minConfidence: 0.45
     });
 
-    return await classifyFingerprint({
-      requestId: args.requestId,
-      attemptLabel: "retry-low-threshold",
-      selectedFinger: args.selectedFinger,
-      capturedImagePath: args.tempImagePath,
-      capturedImageMimeType: args.mimeType,
-      model,
-      minConfidence: 0.45
-    });
+    try {
+      return await classifyFingerprint({
+        requestId: args.requestId,
+        attemptLabel: "retry-low-threshold",
+        selectedFinger: args.selectedFinger,
+        capturedImagePath: args.tempImagePath,
+        capturedImageMimeType: args.mimeType,
+        model,
+        minConfidence: 0.45
+      });
+    } catch (retryError) {
+      logRoute("warn", "Retry with 0.45 threshold failed", {
+        requestId: args.requestId,
+        error: getErrorMessage(retryError),
+        retryable: isRetryableClassificationError(retryError)
+      });
+
+      if (!isRetryableClassificationError(retryError)) {
+        throw retryError;
+      }
+
+      logRoute("info", "Final fallback: Forcing classification with 0 confidence threshold to guarantee output", {
+        requestId: args.requestId,
+        selectedFinger: args.selectedFinger,
+        mimeType: args.mimeType,
+        model,
+        attemptLabel: "retry-force-zero"
+      });
+
+      return await classifyFingerprint({
+        requestId: args.requestId,
+        attemptLabel: "retry-force-zero",
+        selectedFinger: args.selectedFinger,
+        capturedImagePath: args.tempImagePath,
+        capturedImageMimeType: args.mimeType,
+        model,
+        minConfidence: 0.0 // Force it to accept the best guess no matter how low
+      });
+    }
   }
 }
 
