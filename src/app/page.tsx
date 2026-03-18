@@ -61,7 +61,7 @@ export default function HomePage() {
       const { finger, type, confidence } = payload.classification;
       // skip typed routes check for dynamic template string
       router.push(`/report?finger=${encodeURIComponent(finger)}&type=${encodeURIComponent(type)}&confidence=${confidence}` as any);
-      
+
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to classify fingerprint");
       setLoading(false);
@@ -74,7 +74,7 @@ export default function HomePage() {
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-pine">DMIT 4 Finger Demo</p>
         <h1 className="mt-1 text-2xl font-semibold text-ink">Fingerprint Scan & Report</h1>
         <p className="mt-2 text-sm leading-6 text-ink/80">
-          Select one finger, capture with rear camera, classify via Gemini, and render the matching
+          Select one finger, capture with rear camera, classify, and render the matching
           DMIT report from your dataset.
         </p>
       </header>
@@ -123,7 +123,7 @@ export default function HomePage() {
               onClick={analyzeCapture}
               className="w-full rounded-xl bg-brass px-4 py-3 text-base font-semibold text-white transition hover:bg-brass/90 disabled:cursor-not-allowed disabled:bg-brass/40"
             >
-              {loading ? "Analyzing..." : "Analyze With Gemini"}
+              {loading ? "Analyzing..." : "Analyze"}
             </button>
             {errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
           </section>

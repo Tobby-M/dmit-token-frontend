@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera01Icon, Folder01Icon, Image01Icon } from "hugeicons-react";
+import { Camera01Icon, Folder01Icon, Image01Icon, Idea01Icon } from "hugeicons-react";
 
 interface CameraCaptureProps {
   onCapture: (imageDataUrl: string) => void;
@@ -215,8 +215,8 @@ export function CameraCapture({ onCapture, disabled = false }: CameraCaptureProp
         </button>
       </div>
 
-      <p className="text-center text-sm font-medium text-ink/80">
-        💡 For best results, ensure the fingerprint lines (ridges and valleys) are clearly visible and the image is in focus.
+      <p className="flex items-center justify-center gap-2 text-sm font-medium text-ink/80">
+        <Idea01Icon className="h-5 w-5 text-pine" /> For best results, ensure the fingerprint lines (ridges and valleys) are clearly visible and the image is in focus.
       </p>
 
       {mode === "live" ? (
