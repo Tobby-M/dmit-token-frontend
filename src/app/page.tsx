@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ReportView } from "@/components/report/ReportView";
+import { useRouter } from "next/navigation";
 import { CameraCapture } from "@/components/scan/CameraCapture";
 import type { DemoFinger } from "@/lib/dmit/constants";
 import { DEMO_FINGERS } from "@/lib/dmit/constants";
@@ -19,9 +19,9 @@ interface ScanResponse {
 }
 
 export default function HomePage() {
+  const router = useRouter();
   const [selectedFinger, setSelectedFinger] = useState<DemoFinger>("Left Thumb");
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [scanResponse, setScanResponse] = useState<ScanResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -58,11 +58,12 @@ export default function HomePage() {
         throw new Error(("error" in payload && payload.error) || `Classification failed.${details}`);
       }
 
-      setScanResponse(payload);
+      const { finger, type, confidence } = payload.classification;
+      // skip typed routes check for dynamic template string
+      router.push(`/report?finger=${encodeURIComponent(finger)}&type=${encodeURIComponent(type)}&confidence=${confidence}` as any);
+      
     } catch (error) {
-      setScanResponse(null);
       setErrorMessage(error instanceof Error ? error.message : "Failed to classify fingerprint");
-    } finally {
       setLoading(false);
     }
   };
@@ -103,7 +104,6 @@ export default function HomePage() {
             disabled={loading}
             onCapture={(imageDataUrl) => {
               setCapturedImage(imageDataUrl);
-              setScanResponse(null);
               setErrorMessage(null);
             }}
           />
@@ -129,22 +129,14 @@ export default function HomePage() {
           </section>
         </div>
 
-        {scanResponse ? (
-          <ReportView
-            report={scanResponse.report}
-            typeCode={scanResponse.classification.type}
-            confidence={scanResponse.classification.confidence}
-          />
-        ) : (
-          <section className="hidden rounded-[2rem] border border-dashed border-brass/30 bg-white/55 p-8 text-center shadow-card xl:flex xl:min-h-[720px] xl:flex-col xl:items-center xl:justify-center print:hidden">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">Awaiting Scan</p>
-            <h2 className="mt-3 text-2xl font-semibold text-ink">Your report will appear here</h2>
-            <p className="mt-3 max-w-md text-sm leading-7 text-ink/72">
-              Capture one of the four demo fingerprints, run the AI classification, and the matched type image
-              plus parsed report sections will render in a cleaner reading layout for both phone and desktop.
-            </p>
-          </section>
-        )}
+        {/* Awaiting Scan Section */}
+        <section className="hidden rounded-[2rem] border border-dashed border-brass/30 bg-white/55 p-8 text-center shadow-card xl:flex xl:min-h-[720px] xl:flex-col xl:items-center xl:justify-center print:hidden">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">Awaiting Scan</p>
+          <h2 className="mt-3 text-2xl font-semibold text-ink">Scan To See Details</h2>
+          <p className="mt-3 max-w-md text-sm leading-7 text-ink/72">
+            Capture one of the four demo fingerprints, run the AI classification, and you will be redirected to the full detailed DMIT report for that type.
+          </p>
+        </section>
       </div>
     </main>
   );
