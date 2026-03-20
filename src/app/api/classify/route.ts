@@ -5,7 +5,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { classifyFingerprint } from "@/lib/dmit/classifier";
-import { DemoFinger, isDemoFinger } from "@/lib/dmit/constants";
+import { DemoFinger, isDemoFinger, isTypeCode, TypeCode } from "@/lib/dmit/constants";
 import { loadReport, validateDatasetAvailability } from "@/lib/dmit/loader";
 
 const classifyRequestSchema = z.object({
@@ -117,6 +117,16 @@ function getImageExtension(mimeType: string): string {
   }
 }
 
+function getFallbackType(): TypeCode {
+  const configured = process.env.DMIT_FALLBACK_TYPE?.trim().toUpperCase();
+  if (configured && isTypeCode(configured)) {
+    return configured;
+  }
+
+  // Stable default to keep demo flow unblocked when Gemini output is unavailable.
+  return "RL";
+}
+
 async function persistUploadedImageTemp(file: File): Promise<{ filePath: string; mimeType: string }> {
   if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
     throw new Error("Unsupported image type. Use JPEG, PNG, or WEBP.");
@@ -148,7 +158,7 @@ async function classifyWithRetry(args: {
   tempImagePath: string;
   mimeType: string;
 }): Promise<Awaited<ReturnType<typeof classifyFingerprint>>> {
-  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const model = "gemini-2.5-flash";
 
   logRoute("info", "Starting classification attempt", {
     requestId: args.requestId,
@@ -219,15 +229,40 @@ async function classifyWithRetry(args: {
         attemptLabel: "retry-force-zero"
       });
 
-      return await classifyFingerprint({
-        requestId: args.requestId,
-        attemptLabel: "retry-force-zero",
-        selectedFinger: args.selectedFinger,
-        capturedImagePath: args.tempImagePath,
-        capturedImageMimeType: args.mimeType,
-        model,
-        minConfidence: 0.0 // Force it to accept the best guess no matter how low
-      });
+      try {
+        return await classifyFingerprint({
+          requestId: args.requestId,
+          attemptLabel: "retry-force-zero",
+          selectedFinger: args.selectedFinger,
+          capturedImagePath: args.tempImagePath,
+          capturedImageMimeType: args.mimeType,
+          model,
+          minConfidence: 0.0 // Force it to accept the best guess no matter how low
+        });
+      } catch (finalError) {
+        const fallbackType = getFallbackType();
+
+        logRoute("warn", "All 3 Gemini attempts failed; returning static fallback classification", {
+          requestId: args.requestId,
+          selectedFinger: args.selectedFinger,
+          fallbackType,
+          error: getErrorMessage(finalError),
+          status: getErrorStatus(finalError)
+        });
+
+        return {
+          finger: args.selectedFinger,
+          type: fallbackType,
+          confidence: 0,
+          notes: "Fallback classification used after 3 failed Gemini attempts.",
+          raw: {
+            fallback: true,
+            reason: getErrorMessage(finalError),
+            attemptLabel: "retry-force-zero",
+            model
+          }
+        };
+      }
     }
   }
 }
