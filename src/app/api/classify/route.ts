@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { readAccessSession } from "@/lib/access/session";
 import { classifyFingerprint } from "@/lib/dmit/classifier";
 import { DemoFinger, isDemoFinger, isTypeCode, TypeCode } from "@/lib/dmit/constants";
 import { loadReport, validateDatasetAvailability } from "@/lib/dmit/loader";
@@ -282,6 +284,34 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   });
 
   try {
+    const cookieStore = await cookies();
+    const accessSession = readAccessSession(cookieStore);
+
+    if (!accessSession) {
+      logRoute("warn", "Classify request blocked without resolved access session", {
+        requestId
+      });
+      return NextResponse.json(
+        {
+          error: "Resolve your access tier before starting a scan."
+        },
+        { status: 401 }
+      );
+    }
+
+    if (accessSession.tier === "premium") {
+      logRoute("warn", "Premium session attempted AI classification", {
+        requestId
+      });
+      return NextResponse.json(
+        {
+          error: "Premium scans do not use the live AI classification flow.",
+          details: "Premium processing is handled manually after the full 10-finger capture."
+        },
+        { status: 403 }
+      );
+    }
+
     await validateDatasetAvailability();
     logRoute("info", "Dataset availability check passed", { requestId });
 
