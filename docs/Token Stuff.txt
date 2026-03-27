@@ -1,0 +1,112 @@
+Yes. If we use NoCodeBackend, I would do it as a token access system backed by NoCodeBackend, with all NoCodeBackend calls going through our Next.js server.
+
+The key distinction is:
+
+NoCodeBackend secret key = our backend credential to call NoCodeBackend APIs
+Basic / Premium tokens = customer-facing access tokens for this product
+Those are not the same thing.
+
+Recommended design
+
+User opens the app.
+If they skip token entry, they become free.
+If they enter a token, the app sends it to a server route like POST /api/access/resolve.
+Our Next.js server validates that token against NoCodeBackend.
+If valid, the server sets an httpOnly session cookie with the resolved tier:
+free
+basic
+premium
+All later scan/report routes read the tier from the server session, not from the raw token.
+That means the frontend never talks to NoCodeBackend directly.
+
+How we generate the tokens
+
+Generate them on the server, not in the browser.
+
+I would use a format like:
+
+BSC-7K4M2Q9P-4R8J6X2N
+PRM-2T9L5C8V-9Q3W7H1K
+Store:
+
+a searchable token_prefix
+a hashed token_secret
+the tier
+token status and usage info
+Example NoCodeBackend table: access_tokens
+
+id
+token_prefix
+token_hash
+tier
+status
+remaining_uses
+expires_at
+redeemed_at
+scan_session_id
+notes
+My recommendation:
+
+start with single-use tokens
+later, if needed, add reusable tokens with remaining_uses > 1
+How validation would work
+
+When a user submits a token:
+
+Server splits the token into prefix + secret.
+Server looks up the row in NoCodeBackend by token_prefix.
+Server checks:
+token exists
+status is active
+not expired
+remaining uses > 0
+Server compares the submitted secret against the stored hash.
+If valid:
+create scan session
+set signed session cookie
+mark token redeemed or decrement usage count
+return tier config to frontend
+If the token is empty:
+
+return free tier directly
+How NoCodeBackend fits
+
+Use NoCodeBackend as:
+
+the token database
+the scan/session metadata store
+later, possibly upload/job tracking metadata
+Do not use it directly from the browser, because their docs say generated APIs use a Bearer secret key and recommend a server-side proxy for production.
+
+What I would build in this repo
+
+Add token entry UI to page.tsx
+Add server route POST /api/access/resolve
+Add a small NoCodeBackend client module, for example src/lib/ncb.ts
+Add token utilities, for example src/lib/token.ts
+Add session handling with a signed cookie
+Refactor the scan flow so it branches by tier before camera flow starts
+Update classify route to trust the resolved session tier
+Recommended implementation order
+
+Create NoCodeBackend schema for access_tokens
+Create a server-only NoCodeBackend client
+Create a token generator script or admin route
+Create POST /api/access/resolve
+Add signed session cookie
+Add tier-based routing:
+free = 1 finger
+basic = 4 fingers
+premium = 10 fingers, no AI
+Add admin views later if needed
+Important security rule
+
+Do not put the NoCodeBackend secret key in the frontend.
+Only the Next.js server should use it.
+
+Sources:
+
+NoCodeBackend docs: setup database and generate APIs
+NoCodeBackend docs: auth uses secret key bearer token
+NoCodeBackend docs: password field uses bcrypt and is suitable for secret tokens
+If you want, I can turn this into a concrete schema plus exact API contract next.
