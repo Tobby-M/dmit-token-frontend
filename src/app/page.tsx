@@ -237,6 +237,10 @@ export default function HomePage() {
     );
   }
 
+  function openBasicReport(sessionId: string) {
+    router.push(`/report/basic?sessionId=${encodeURIComponent(sessionId)}` as any);
+  }
+
   async function analyzeCapture() {
     if (!capturedImage) {
       setErrorMessage("Capture a fingerprint image first.");
@@ -765,10 +769,18 @@ export default function HomePage() {
                 </p>
                 <h2 className="mt-3 text-2xl font-semibold text-ink">Review the 4 scan results</h2>
                 <p className="mt-3 text-sm leading-7 text-ink/72">
-                  The combined Basic report model is still pending, so each completed finger keeps
-                  its own result card and report link for now.
+                  The four completed Basic fingerprints now feed into a bundled in-app report, while
+                  the individual result cards remain available for quick review.
                 </p>
               </div>
+
+              <button
+                type="button"
+                className="w-full rounded-xl bg-pine px-4 py-3 text-base font-semibold text-white transition hover:bg-pine/90"
+                onClick={() => openBasicReport(currentScanSession.id)}
+              >
+                Open Combined Basic Report
+              </button>
 
               <div className="grid gap-4 md:grid-cols-2">
                 {basicResults.map((result) => (
