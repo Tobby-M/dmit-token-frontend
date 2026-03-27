@@ -3,10 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CameraCapture } from "@/components/scan/CameraCapture";
-import type { AccessTier } from "@/lib/access/shared";
-import { getTierLabel } from "@/lib/access/shared";
+import {
+  BASIC_SCAN_SEQUENCE,
+  FREE_FINGER_OPTIONS,
+  PREMIUM_SCAN_SEQUENCE,
+  getFreeFingerFromChoice,
+  type FreeFingerChoice
+} from "@/lib/access/scan-flow";
+import {
+  getTierLabel,
+  type PublicAccessSession,
+  type ScanSessionSummary
+} from "@/lib/access/shared";
+import { toHighContrastFingerprint } from "@/lib/image/fingerprint-processing";
 import type { DemoFinger } from "@/lib/dmit/constants";
-import { DEMO_FINGERS } from "@/lib/dmit/constants";
 import type { DmitReport } from "@/lib/dmit/parser";
 
 interface ScanResponse {
@@ -18,34 +28,37 @@ interface ScanResponse {
     notes: string;
   };
   report: DmitReport;
+  session: ScanSessionSummary;
 }
 
-interface AccessSessionState {
-  tier: AccessTier;
-  tokenPrefix: string | null;
+interface SessionMutationResponse {
+  ok: true;
+  session: ScanSessionSummary;
 }
 
 interface AccessSessionResponse {
   resolved: boolean;
-  session: AccessSessionState | null;
+  session: PublicAccessSession | null;
 }
 
 interface AccessResolveResponse {
   ok: true;
-  session: AccessSessionState;
+  session: PublicAccessSession;
 }
 
 export default function HomePage() {
   const router = useRouter();
-  const [selectedFinger, setSelectedFinger] = useState<DemoFinger>("Left Thumb");
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [flowMessage, setFlowMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [processingCapture, setProcessingCapture] = useState(false);
   const [accessState, setAccessState] = useState<"checking" | "gated" | "ready">("checking");
-  const [accessSession, setAccessSession] = useState<AccessSessionState | null>(null);
+  const [accessSession, setAccessSession] = useState<PublicAccessSession | null>(null);
   const [accessToken, setAccessToken] = useState("");
   const [accessPending, setAccessPending] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [freeFingerChoice, setFreeFingerChoice] = useState<FreeFingerChoice>("thumb");
 
   useEffect(() => {
     let isCancelled = false;
@@ -93,14 +106,40 @@ export default function HomePage() {
   }, []);
 
   const previewText = useMemo(() => {
-    if (!capturedImage) {
-      return "No capture yet";
+    if (processingCapture) {
+      return "Processing capture into high-contrast black-and-white.";
     }
-    return "Fingerprint captured and ready for AI analysis";
-  }, [capturedImage]);
+
+    if (!capturedImage) {
+      return "No capture yet.";
+    }
+
+    return accessSession?.tier === "premium"
+      ? "Processed Premium capture ready to save into the session."
+      : "Processed fingerprint ready for AI analysis.";
+  }, [accessSession?.tier, capturedImage, processingCapture]);
 
   const currentTierLabel = accessSession ? getTierLabel(accessSession.tier) : null;
-  const canAnalyze = accessSession?.tier !== "premium";
+  const currentScanSession = accessSession?.scanSession ?? null;
+  const basicResults = currentScanSession?.basicResults ?? [];
+  const premiumCaptures = currentScanSession?.premiumCaptures ?? [];
+  const completedCount = currentScanSession?.completedCount ?? 0;
+  const basicCompleted = accessSession?.tier === "basic" && currentScanSession?.isComplete === true;
+  const premiumCompleted =
+    accessSession?.tier === "premium" && currentScanSession?.isComplete === true;
+  const readyForCompletion = currentScanSession?.readyForCompletion ?? false;
+
+  const currentFinger = useMemo(() => {
+    if (!accessSession) {
+      return null;
+    }
+
+    if (accessSession.tier === "free") {
+      return getFreeFingerFromChoice(freeFingerChoice);
+    }
+
+    return accessSession.scanSession.nextFinger;
+  }, [accessSession, freeFingerChoice]);
 
   async function resolveAccess(token: string) {
     setAccessPending(true);
@@ -125,6 +164,9 @@ export default function HomePage() {
       setAccessState("ready");
       setCapturedImage(null);
       setErrorMessage(null);
+      setFlowMessage(null);
+      setProcessingCapture(false);
+      setFreeFingerChoice("thumb");
     } catch (error) {
       setAccessError(error instanceof Error ? error.message : "Unable to resolve access.");
     } finally {
@@ -145,7 +187,10 @@ export default function HomePage() {
       setAccessState("gated");
       setCapturedImage(null);
       setErrorMessage(null);
+      setFlowMessage(null);
       setLoading(false);
+      setProcessingCapture(false);
+      setFreeFingerChoice("thumb");
     } catch (error) {
       setAccessError(error instanceof Error ? error.message : "Unable to reset access.");
     } finally {
@@ -153,29 +198,69 @@ export default function HomePage() {
     }
   }
 
-  const analyzeCapture = async () => {
+  function updateScanSession(session: ScanSessionSummary) {
+    setAccessSession((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        scanSession: session
+      };
+    });
+  }
+
+  async function finalizeCurrentSession(options?: {
+    successMessage?: string;
+  }): Promise<ScanSessionSummary | null> {
+    const response = await fetch("/api/scan/complete", {
+      method: "POST"
+    });
+
+    const payload = (await response.json()) as SessionMutationResponse | { error?: string };
+    if (!response.ok || !("ok" in payload)) {
+      throw new Error(("error" in payload && payload.error) || "Unable to finalize the scan.");
+    }
+
+    updateScanSession(payload.session);
+    if (options?.successMessage) {
+      setFlowMessage(options.successMessage);
+    }
+
+    return payload.session;
+  }
+
+  function openReport(finger: string, type: string, confidence: number) {
+    router.push(
+      `/report?finger=${encodeURIComponent(finger)}&type=${encodeURIComponent(type)}&confidence=${confidence}` as any
+    );
+  }
+
+  async function analyzeCapture() {
     if (!capturedImage) {
       setErrorMessage("Capture a fingerprint image first.");
       return;
     }
 
-    if (!accessSession) {
+    if (!accessSession || !currentFinger) {
       setErrorMessage("Resolve your access tier before starting a scan.");
       return;
     }
 
-    if (!canAnalyze) {
+    if (accessSession.tier === "premium") {
       setErrorMessage("Premium flow does not use live AI analysis.");
       return;
     }
 
     setLoading(true);
     setErrorMessage(null);
+    setFlowMessage(null);
 
     try {
       const imageBlob = dataUrlToBlob(capturedImage);
       const formData = new FormData();
-      formData.append("selectedFinger", selectedFinger);
+      formData.append("selectedFinger", currentFinger);
       formData.append("image", imageBlob, `fingerprint-${Date.now()}.jpg`);
 
       const response = await fetch("/api/classify", {
@@ -189,15 +274,92 @@ export default function HomePage() {
         throw new Error(("error" in payload && payload.error) || `Classification failed.${details}`);
       }
 
-      const { finger, type, confidence } = payload.classification;
-      router.push(
-        `/report?finger=${encodeURIComponent(finger)}&type=${encodeURIComponent(type)}&confidence=${confidence}` as any
+      updateScanSession(payload.session);
+      setCapturedImage(null);
+
+      if (accessSession.tier === "free") {
+        await finalizeCurrentSession();
+        const { finger, type, confidence } = payload.classification;
+        router.push(
+          `/report?finger=${encodeURIComponent(finger)}&type=${encodeURIComponent(type)}&confidence=${confidence}` as any
+        );
+        return;
+      }
+
+      if (payload.session.readyForCompletion) {
+        await finalizeCurrentSession({
+          successMessage:
+            "Basic scan sequence complete. Token usage has been updated and the results are ready."
+        });
+        return;
+      }
+
+      const nextFinger = payload.session.nextFinger;
+      setFlowMessage(
+        nextFinger
+          ? `${payload.classification.finger} complete. Next finger: ${nextFinger}.`
+          : `${payload.classification.finger} complete.`
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to classify fingerprint");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to classify fingerprint.");
+    } finally {
       setLoading(false);
     }
-  };
+  }
+
+  async function savePremiumCapture() {
+    if (!capturedImage) {
+      setErrorMessage("Capture a fingerprint image first.");
+      return;
+    }
+
+    if (!accessSession || accessSession.tier !== "premium" || !currentFinger) {
+      setErrorMessage("Resolve a Premium session before saving captures.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+    setFlowMessage(null);
+
+    try {
+      const imageBlob = dataUrlToBlob(capturedImage);
+      const formData = new FormData();
+      formData.append("selectedFinger", currentFinger);
+      formData.append("image", imageBlob, `premium-${Date.now()}.jpg`);
+
+      const response = await fetch("/api/scan/capture", {
+        method: "POST",
+        body: formData
+      });
+
+      const payload = (await response.json()) as SessionMutationResponse | { error?: string };
+      if (!response.ok || !("ok" in payload)) {
+        throw new Error(("error" in payload && payload.error) || "Unable to save Premium capture.");
+      }
+
+      updateScanSession(payload.session);
+      setCapturedImage(null);
+
+      if (payload.session.readyForCompletion) {
+        await finalizeCurrentSession({
+          successMessage:
+            "Premium capture sequence complete. Processed files are stored and the token has been consumed."
+        });
+        return;
+      }
+
+      setFlowMessage(
+        payload.session.nextFinger
+          ? `${currentFinger} saved. Next finger: ${payload.session.nextFinger}.`
+          : `${currentFinger} saved.`
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to save Premium capture.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   if (accessState === "checking") {
     return (
@@ -236,8 +398,8 @@ export default function HomePage() {
               title="Free Trial"
               points={[
                 "No token required",
-                "Single scan at a time",
-                "Unlocks the current demo scanner"
+                "1 finger only",
+                "Choose Thumb or Index before the camera starts"
               ]}
             />
             <AccessTierCard
@@ -245,8 +407,8 @@ export default function HomePage() {
               title="Basic Plan"
               points={[
                 "Enter a valid Basic token",
-                "Current demo uses the 4 supported fingers",
-                "AI classification stays enabled"
+                "Guided 4-finger sequence",
+                "Token is consumed only after the sequence is completed"
               ]}
             />
             <AccessTierCard
@@ -254,8 +416,8 @@ export default function HomePage() {
               title="Premium Plan"
               points={[
                 "Enter a valid Premium token",
-                "Reserved for the manual 10-finger flow",
-                "Live AI scanner remains disabled"
+                "Guided 10-finger capture across both hands",
+                "Processed images are saved for manual review"
               ]}
             />
           </section>
@@ -324,60 +486,17 @@ export default function HomePage() {
     );
   }
 
-  if (!accessSession) {
+  if (!accessSession || !currentScanSession) {
     return null;
   }
 
-  if (accessSession.tier === "premium") {
-    return (
-      <main className="mx-auto min-h-screen w-full max-w-5xl px-4 py-5 sm:px-6 lg:px-8">
-        <header className="rounded-[2rem] border border-brass/25 bg-white/78 p-6 shadow-card backdrop-blur">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
-                {currentTierLabel}
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold text-ink">Premium manual flow</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-ink/72">
-                Your Premium token has been validated. The guided 10-finger capture and manual lab
-                handoff flow is the next implementation step, so live AI analysis is intentionally
-                disabled here.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              className="rounded-xl border border-brass/30 px-4 py-3 text-sm font-semibold text-ink transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={accessPending}
-              onClick={() => void resetAccess()}
-            >
-              Change access
-            </button>
-          </div>
-        </header>
-
-        <section className="mt-6 grid gap-4 rounded-[2rem] border border-dashed border-brass/35 bg-white/70 p-6 shadow-card">
-          <div className="rounded-2xl bg-canvas/80 p-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
-              Valid token
-            </p>
-            <p className="mt-2 text-base font-semibold text-ink">
-              {accessSession.tokenPrefix ?? "Premium session active"}
-            </p>
-          </div>
-
-          <div className="grid gap-3 rounded-2xl border border-brass/20 bg-white p-5">
-            <p className="text-sm font-semibold text-ink">What comes next</p>
-            <ul className="list-disc space-y-2 pl-5 text-sm leading-7 text-ink/72">
-              <li>Guided 10-finger capture across both hands</li>
-              <li>Processed image packaging for cloud upload</li>
-              <li>Manual lab handoff instead of live Gemini classification</li>
-            </ul>
-          </div>
-        </section>
-      </main>
-    );
-  }
+  const showCaptureWorkspace = !currentScanSession.isComplete;
+  const sequence =
+    accessSession.tier === "basic"
+      ? BASIC_SCAN_SEQUENCE
+      : accessSession.tier === "premium"
+        ? PREMIUM_SCAN_SEQUENCE
+        : null;
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-7xl space-y-5 px-4 py-5 sm:px-6 lg:px-8 print:max-w-none print:px-0 print:py-0">
@@ -389,8 +508,9 @@ export default function HomePage() {
             </p>
             <h1 className="mt-1 text-2xl font-semibold text-ink">Fingerprint Scan & Report</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-ink/80">
-              Access is now token-gated. Free and Basic users can use the current scan demo while
-              tier-specific guided flows are implemented next.
+              {accessSession.tier === "premium"
+                ? "Premium sessions save processed captures for manual review. The token is consumed only after all 10 captures are finalized."
+                : "Free uses one finger and Basic follows the required 4-finger sequence. Tokens are consumed only after a successful session completion."}
             </p>
           </div>
 
@@ -400,6 +520,10 @@ export default function HomePage() {
                 {accessSession.tokenPrefix}
               </span>
             ) : null}
+
+            <span className="rounded-full bg-pine/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-pine">
+              {completedCount}/{currentScanSession.requiredFingerCount} complete
+            </span>
 
             <button
               type="button"
@@ -415,70 +539,343 @@ export default function HomePage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(340px,420px)_minmax(0,1fr)] print:block">
         <div className="space-y-5 print:hidden">
-          <section className="space-y-3 rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
-            <div className="flex items-center justify-between gap-3">
-              <label className="block text-sm font-medium text-ink" htmlFor="finger-select">
-                Finger To Scan
-              </label>
-              <span className="rounded-full bg-pine/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-pine">
-                {currentTierLabel}
-              </span>
-            </div>
-            <select
-              id="finger-select"
-              value={selectedFinger}
-              onChange={(event) => setSelectedFinger(event.target.value as DemoFinger)}
-              className="w-full rounded-xl border border-brass/40 bg-canvas px-3 py-3 text-base text-ink"
-              disabled={loading}
-            >
-              {DEMO_FINGERS.map((finger) => (
-                <option key={finger} value={finger}>
-                  {finger}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs leading-6 text-ink/60">
-              The guided tier-specific scan sequence is the next step. For now, Free and Basic
-              access unlock the existing demo finger set.
-            </p>
-          </section>
+          {accessSession.tier === "free" ? (
+            <section className="space-y-4 rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
+                  Free Tier Finger Selection
+                </p>
+                <h2 className="text-xl font-semibold text-ink">Choose one finger</h2>
+                <p className="text-sm leading-6 text-ink/72">
+                  The Free flow only exposes two choices before the camera starts: Thumb or Index.
+                </p>
+              </div>
 
-          <CameraCapture
-            disabled={loading}
-            onCapture={(imageDataUrl) => {
-              setCapturedImage(imageDataUrl);
-              setErrorMessage(null);
-            }}
-          />
+              <div className="grid gap-3 sm:grid-cols-2">
+                {FREE_FINGER_OPTIONS.map((option) => {
+                  const selected = freeFingerChoice === option.value;
 
-          <section className="space-y-3 rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
-            <p className="text-sm text-ink/80">{previewText}</p>
-            {capturedImage ? (
-              <img
-                src={capturedImage}
-                alt="Captured fingerprint"
-                className="h-40 w-full rounded-xl border border-brass/30 object-cover"
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setFreeFingerChoice(option.value);
+                        setCapturedImage(null);
+                        setErrorMessage(null);
+                        setFlowMessage(null);
+                      }}
+                      className={`rounded-2xl border px-4 py-4 text-left transition ${
+                        selected
+                          ? "border-pine bg-pine/8 shadow-sm"
+                          : "border-brass/25 bg-canvas/40 hover:bg-canvas"
+                      }`}
+                    >
+                      <p className="text-base font-semibold text-ink">{option.label}</p>
+                      <p className="mt-2 text-sm leading-6 text-ink/70">{option.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="rounded-2xl bg-canvas/70 px-4 py-3 text-xs leading-6 text-ink/65">
+                Temporary demo mapping: Thumb uses <strong>Left Thumb</strong> and Index uses{" "}
+                <strong>Left Index</strong> until the full free-tier capture rule is finalized.
+              </p>
+            </section>
+          ) : sequence ? (
+            <section className="space-y-4 rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
+                    {accessSession.tier === "basic" ? "Guided Basic Flow" : "Guided Premium Flow"}
+                  </p>
+                  <h2 className="text-xl font-semibold text-ink">
+                    Step{" "}
+                    {Math.min(
+                      currentScanSession.completedCount + 1,
+                      currentScanSession.requiredFingerCount
+                    )}{" "}
+                    of {currentScanSession.requiredFingerCount}
+                  </h2>
+                  <p className="text-sm leading-6 text-ink/72">
+                    {accessSession.tier === "basic"
+                      ? "Basic access dictates the finger order and keeps AI enabled."
+                      : "Premium captures all 10 fingers in order and stores processed images for manual review."}
+                  </p>
+                </div>
+
+                <span className="rounded-full bg-pine/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-pine">
+                  {completedCount}/{currentScanSession.requiredFingerCount} complete
+                </span>
+              </div>
+
+              <ol className={`grid gap-3 ${accessSession.tier === "premium" ? "sm:grid-cols-2" : ""}`}>
+                {sequence.map((finger, index) => {
+                  const completed = index < currentScanSession.completedCount;
+                  const current = index === currentScanSession.completedCount && !currentScanSession.isComplete;
+
+                  return (
+                    <li
+                      key={finger}
+                      className={`rounded-2xl border px-4 py-3 ${
+                        completed
+                          ? "border-pine/25 bg-pine/8"
+                          : current
+                            ? "border-brass/40 bg-canvas/80"
+                            : "border-brass/20 bg-white"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-ink">{finger}</p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-ink/45">
+                            {completed ? "Completed" : current ? "Current finger" : "Upcoming"}
+                          </p>
+                        </div>
+
+                        {completed ? (
+                          <span className="rounded-full bg-pine/12 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-pine">
+                            Done
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          ) : null}
+
+          {showCaptureWorkspace ? (
+            <>
+              <section className="rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-pine">
+                      Current Finger
+                    </p>
+                    <h2 className="mt-1 text-2xl font-semibold text-ink">
+                      {currentFinger ?? "Waiting"}
+                    </h2>
+                  </div>
+                  <span className="rounded-full bg-canvas px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-ink/60">
+                    {currentTierLabel}
+                  </span>
+                </div>
+              </section>
+
+              <CameraCapture
+                disabled={loading || processingCapture || !currentFinger}
+                onCapture={async (imageDataUrl) => {
+                  setProcessingCapture(true);
+                  setErrorMessage(null);
+                  setFlowMessage(null);
+
+                  try {
+                    const processedImage = await toHighContrastFingerprint(imageDataUrl);
+                    setCapturedImage(processedImage);
+                    setFlowMessage("Capture processed to high-contrast black-and-white.");
+                  } catch (error) {
+                    setCapturedImage(imageDataUrl);
+                    setErrorMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Unable to process the captured fingerprint image."
+                    );
+                  } finally {
+                    setProcessingCapture(false);
+                  }
+                }}
               />
-            ) : null}
-            <button
-              type="button"
-              disabled={!capturedImage || loading}
-              onClick={analyzeCapture}
-              className="w-full rounded-xl bg-brass px-4 py-3 text-base font-semibold text-white transition hover:bg-brass/90 disabled:cursor-not-allowed disabled:bg-brass/40"
-            >
-              {loading ? "Analyzing..." : "Analyze"}
-            </button>
-            {errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
-          </section>
+
+              <section className="space-y-3 rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
+                <p className="text-sm text-ink/80">{previewText}</p>
+                {capturedImage ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-pine">
+                      Processed Preview
+                    </p>
+                    <img
+                      src={capturedImage}
+                      alt="Processed fingerprint preview"
+                      className="h-40 w-full rounded-xl border border-brass/30 object-cover"
+                    />
+                  </div>
+                ) : null}
+
+                {readyForCompletion ? (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() =>
+                      void finalizeCurrentSession({
+                        successMessage:
+                          accessSession.tier === "premium"
+                            ? "Premium session finalized and token usage updated."
+                            : "Basic session finalized and token usage updated."
+                      }).catch((error) => {
+                        setErrorMessage(
+                          error instanceof Error ? error.message : "Unable to finalize the scan."
+                        );
+                      })
+                    }
+                    className="w-full rounded-xl bg-pine px-4 py-3 text-base font-semibold text-white transition hover:bg-pine/90 disabled:cursor-not-allowed disabled:bg-pine/40"
+                  >
+                    {loading ? "Finalizing..." : "Finalize session"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!capturedImage || loading || processingCapture || !currentFinger}
+                    onClick={() =>
+                      void (accessSession.tier === "premium" ? savePremiumCapture() : analyzeCapture())
+                    }
+                    className="w-full rounded-xl bg-brass px-4 py-3 text-base font-semibold text-white transition hover:bg-brass/90 disabled:cursor-not-allowed disabled:bg-brass/40"
+                  >
+                    {processingCapture
+                      ? "Processing capture..."
+                      : loading
+                        ? accessSession.tier === "premium"
+                          ? "Saving..."
+                          : "Analyzing..."
+                        : accessSession.tier === "premium"
+                          ? `Save ${currentFinger ?? "Current Finger"}`
+                          : accessSession.tier === "basic"
+                            ? `Analyze ${currentFinger ?? "Current Finger"}`
+                            : "Analyze"}
+                  </button>
+                )}
+
+                {errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
+                {flowMessage ? <p className="text-sm text-pine">{flowMessage}</p> : null}
+              </section>
+            </>
+          ) : null}
         </div>
 
-        <section className="hidden rounded-[2rem] border border-dashed border-brass/30 bg-white/55 p-8 text-center shadow-card xl:flex xl:min-h-[720px] xl:flex-col xl:items-center xl:justify-center print:hidden">
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">Awaiting Scan</p>
-          <h2 className="mt-3 text-2xl font-semibold text-ink">Scan To See Details</h2>
-          <p className="mt-3 max-w-md text-sm leading-7 text-ink/72">
-            Capture one of the supported demo fingerprints, run the AI classification, and you will
-            be redirected to the detailed DMIT report for that type.
-          </p>
+        <section className="rounded-[2rem] border border-dashed border-brass/30 bg-white/55 p-8 shadow-card print:hidden">
+          {basicCompleted ? (
+            <div className="space-y-5">
+              <CompletionStatusCard session={currentScanSession} />
+
+              <div className="text-center">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
+                  Basic Sequence Complete
+                </p>
+                <h2 className="mt-3 text-2xl font-semibold text-ink">Review the 4 scan results</h2>
+                <p className="mt-3 text-sm leading-7 text-ink/72">
+                  The combined Basic report model is still pending, so each completed finger keeps
+                  its own result card and report link for now.
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                {basicResults.map((result) => (
+                  <article
+                    key={result.finger}
+                    className="rounded-[1.6rem] border border-brass/25 bg-white p-5 shadow-card"
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-pine">
+                      {result.finger}
+                    </p>
+                    <h3 className="mt-2 text-xl font-semibold text-ink">{result.abilityTitle}</h3>
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div className="rounded-2xl bg-canvas/80 p-3">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">Type</p>
+                        <p className="mt-1 text-lg font-semibold text-ink">{result.type}</p>
+                      </div>
+                      <div className="rounded-2xl bg-canvas/80 p-3">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">
+                          Confidence
+                        </p>
+                        <p className="mt-1 text-lg font-semibold text-ink">
+                          {(result.confidence * 100).toFixed(1)}%
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-4 text-sm leading-6 text-ink/72">{result.notes}</p>
+                    <button
+                      type="button"
+                      className="mt-5 w-full rounded-xl bg-pine px-4 py-3 text-sm font-semibold text-white transition hover:bg-pine/90"
+                      onClick={() => openReport(result.finger, result.type, result.confidence)}
+                    >
+                      View report
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : premiumCompleted ? (
+            <div className="space-y-5">
+              <CompletionStatusCard session={currentScanSession} />
+
+              <div className="text-center">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
+                  Premium Capture Complete
+                </p>
+                <h2 className="mt-3 text-2xl font-semibold text-ink">
+                  Processed capture package is ready
+                </h2>
+                <p className="mt-3 text-sm leading-7 text-ink/72">
+                  All 10 processed Premium captures were stored locally for manual review. Live AI
+                  classification remains disabled for this tier.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                {premiumCaptures.map((capture) => (
+                  <article
+                    key={capture.finger}
+                    className="rounded-2xl border border-brass/25 bg-white p-4 shadow-card"
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-pine">
+                      {capture.finger}
+                    </p>
+                    <p className="mt-2 text-sm text-ink/72">
+                      Saved as {capture.fileName ?? "processed image"}
+                    </p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.16em] text-ink/45">
+                      {capture.processed ? "Processed" : "Raw"} • {formatTimestamp(capture.capturedAt)}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : readyForCompletion ? (
+            <div className="flex h-full min-h-[420px] flex-col items-center justify-center text-center xl:min-h-[720px]">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
+                Ready To Finalize
+              </p>
+              <h2 className="mt-3 text-2xl font-semibold text-ink">
+                All required captures are already recorded
+              </h2>
+              <p className="mt-3 max-w-md text-sm leading-7 text-ink/72">
+                Finalize the session from the left panel to consume the token and lock the scan as
+                complete.
+              </p>
+            </div>
+          ) : (
+            <div className="flex h-full min-h-[420px] flex-col items-center justify-center text-center xl:min-h-[720px]">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-pine">
+                Awaiting Scan
+              </p>
+              <h2 className="mt-3 text-2xl font-semibold text-ink">
+                {accessSession.tier === "free"
+                  ? "Choose and scan one finger"
+                  : accessSession.tier === "basic"
+                    ? "Follow the guided Basic sequence"
+                    : "Follow the guided Premium sequence"}
+              </h2>
+              <p className="mt-3 max-w-md text-sm leading-7 text-ink/72">
+                {accessSession.tier === "free"
+                  ? "Select Thumb or Index, capture the fingerprint, and continue into the report flow."
+                  : accessSession.tier === "basic"
+                    ? "Capture and analyze each required finger in order. Completed Basic results will stay here until the sequence is done."
+                    : "Capture each Premium finger in order. Every processed image will be stored and the token will only be consumed after the full 10-finger set is finalized."}
+              </p>
+            </div>
+          )}
         </section>
       </div>
     </main>
@@ -503,6 +900,43 @@ function AccessTierCard(props: {
   );
 }
 
+function CompletionStatusCard(props: {
+  session: ScanSessionSummary;
+}) {
+  const { redemption } = props.session;
+
+  return (
+    <section className="grid gap-4 rounded-[1.6rem] border border-brass/25 bg-white p-5 shadow-card md:grid-cols-3">
+      <div className="rounded-2xl bg-canvas/80 p-4">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">Session Status</p>
+        <p className="mt-2 text-lg font-semibold text-ink">
+          {props.session.status === "completed" ? "Completed" : props.session.status}
+        </p>
+      </div>
+      <div className="rounded-2xl bg-canvas/80 p-4">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">Token Usage</p>
+        <p className="mt-2 text-lg font-semibold text-ink">
+          {redemption.consumed ? "Consumed" : "Not required"}
+        </p>
+        {redemption.consumedAt ? (
+          <p className="mt-1 text-xs text-ink/60">{formatTimestamp(redemption.consumedAt)}</p>
+        ) : null}
+      </div>
+      <div className="rounded-2xl bg-canvas/80 p-4">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-ink/45">Remaining Uses</p>
+        <p className="mt-2 text-lg font-semibold text-ink">
+          {redemption.afterRemainingUses ?? "Free"}
+        </p>
+        {redemption.resultingStatus ? (
+          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-ink/50">
+            {redemption.resultingStatus}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function dataUrlToBlob(dataUrl: string): Blob {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
   if (!match) {
@@ -519,4 +953,19 @@ function dataUrlToBlob(dataUrl: string): Blob {
   }
 
   return new Blob([bytes], { type: mimeType });
+}
+
+function formatTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(timestamp);
 }

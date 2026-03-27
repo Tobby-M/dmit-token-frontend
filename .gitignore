@@ -17,3 +17,4 @@ public/fallback-*.js
 .DS_Store
 *.log
 *.tsbuildinfo
+.runtime/

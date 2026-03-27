@@ -1,11 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { findTokenByPrefix } from "@/lib/access/nocodebackend";
 import {
+  abandonScanSessionRecord,
+  createScanSessionRecord,
+  toScanSessionSummary
+} from "@/lib/access/scan-session-store";
+import { getFingerTargetsForTier, getRequiredFingerCount } from "@/lib/access/scan-flow";
+import {
   createAccessSessionValue,
   ACCESS_SESSION_COOKIE,
-  getAccessSessionCookieOptions
+  getAccessSessionCookieOptions,
+  readAccessSession
 } from "@/lib/access/session";
 import {
   getTokenValidationError,
@@ -27,13 +35,29 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const rawToken = parsedBody.data.token.trim();
   const cookieStore = await cookies();
+  const previousSession = readAccessSession(cookieStore);
+
+  if (previousSession?.scanSessionId) {
+    await abandonScanSessionRecord(previousSession.scanSessionId);
+  }
 
   if (!rawToken) {
+    const scanSession = await createScanSessionRecord({
+      id: randomUUID(),
+      tier: "free",
+      tokenPrefix: null,
+      tokenRecordId: null,
+      requiredFingerCount: getRequiredFingerCount("free"),
+      fingerTargets: getFingerTargetsForTier("free")
+    });
+
     cookieStore.set(
       ACCESS_SESSION_COOKIE,
       createAccessSessionValue({
         tier: "free",
-        tokenPrefix: null
+        tokenPrefix: null,
+        tokenRecordId: null,
+        scanSessionId: scanSession.id
       }),
       getAccessSessionCookieOptions(request)
     );
@@ -42,7 +66,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       ok: true,
       session: {
         tier: "free",
-        tokenPrefix: null
+        tokenPrefix: null,
+        scanSessionId: scanSession.id,
+        scanSession: toScanSessionSummary(scanSession)
       }
     });
   }
@@ -85,11 +111,22 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  const scanSession = await createScanSessionRecord({
+    id: randomUUID(),
+    tier: record.tier,
+    tokenPrefix: record.token_prefix,
+    tokenRecordId: record.id,
+    requiredFingerCount: getRequiredFingerCount(record.tier),
+    fingerTargets: getFingerTargetsForTier(record.tier)
+  });
+
   cookieStore.set(
     ACCESS_SESSION_COOKIE,
     createAccessSessionValue({
       tier: record.tier,
-      tokenPrefix: record.token_prefix
+      tokenPrefix: record.token_prefix,
+      tokenRecordId: record.id,
+      scanSessionId: scanSession.id
     }),
     getAccessSessionCookieOptions(request)
   );
@@ -98,7 +135,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     ok: true,
     session: {
       tier: record.tier,
-      tokenPrefix: record.token_prefix
+      tokenPrefix: record.token_prefix,
+      scanSessionId: scanSession.id,
+      scanSession: toScanSessionSummary(scanSession)
     }
   });
 }

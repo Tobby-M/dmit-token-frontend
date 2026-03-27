@@ -5,6 +5,14 @@ import path from "node:path";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  FREE_ALLOWED_DEMO_FINGERS
+} from "@/lib/access/scan-flow";
+import {
+  getScanSessionRecord,
+  toScanSessionSummary,
+  updateScanSessionRecord
+} from "@/lib/access/scan-session-store";
 import { readAccessSession } from "@/lib/access/session";
 import { classifyFingerprint } from "@/lib/dmit/classifier";
 import { DemoFinger, isDemoFinger, isTypeCode, TypeCode } from "@/lib/dmit/constants";
@@ -299,6 +307,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    const scanSession = await getScanSessionRecord(accessSession.scanSessionId);
+    if (!scanSession) {
+      logRoute("warn", "Access session missing scan session record", {
+        requestId,
+        scanSessionId: accessSession.scanSessionId
+      });
+      return NextResponse.json(
+        {
+          error: "Your scan session could not be restored. Resolve access again to continue."
+        },
+        { status: 409 }
+      );
+    }
+
+    if (scanSession.status !== "active") {
+      logRoute("warn", "Classify request blocked for inactive scan session", {
+        requestId,
+        scanSessionId: scanSession.id,
+        status: scanSession.status
+      });
+      return NextResponse.json(
+        {
+          error:
+            scanSession.status === "completed"
+              ? "This scan session is already complete. Change access to start a new one."
+              : "This scan session is no longer active. Resolve access again to continue."
+        },
+        { status: 409 }
+      );
+    }
+
     if (accessSession.tier === "premium") {
       logRoute("warn", "Premium session attempted AI classification", {
         requestId
@@ -309,6 +348,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           details: "Premium processing is handled manually after the full 10-finger capture."
         },
         { status: 403 }
+      );
+    }
+
+    if (scanSession.completedFingers.length >= scanSession.requiredFingerCount) {
+      logRoute("warn", "Classify request blocked after required scan count reached", {
+        requestId,
+        scanSessionId: scanSession.id,
+        completedFingers: scanSession.completedFingers
+      });
+      return NextResponse.json(
+        {
+          error: "This scan session already has all required captures. Finalize it or change access."
+        },
+        { status: 409 }
       );
     }
 
@@ -343,6 +396,35 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { error: "Unsupported finger for demo." },
         { status: 400 }
       );
+    }
+
+    if (accessSession.tier === "free") {
+      if (!FREE_ALLOWED_DEMO_FINGERS.includes(parsed.selectedFinger)) {
+        return NextResponse.json(
+          { error: "Free Trial only supports the Thumb or Index options." },
+          { status: 400 }
+        );
+      }
+
+      const lockedFinger = scanSession.fingerTargets[0];
+      if (lockedFinger && lockedFinger !== parsed.selectedFinger) {
+        return NextResponse.json(
+          { error: `This Free Trial session is locked to ${lockedFinger}.` },
+          { status: 409 }
+        );
+      }
+    } else {
+      const expectedFinger = scanSession.fingerTargets[scanSession.completedFingers.length];
+      if (!expectedFinger || expectedFinger !== parsed.selectedFinger) {
+        return NextResponse.json(
+          {
+            error: expectedFinger
+              ? `Capture ${expectedFinger} next to stay in the Basic sequence.`
+              : "This scan session has no remaining Basic fingers to analyze."
+          },
+          { status: 409 }
+        );
+      }
     }
 
     const persisted = await persistUploadedImageTemp(image);
@@ -394,6 +476,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const report = await loadReport(classification.finger, classification.type);
+    const updatedSession = await updateScanSessionRecord(accessSession.scanSessionId, (record) => ({
+      ...record,
+      fingerTargets:
+        record.tier === "free" && record.fingerTargets.length === 0
+          ? [classification.finger]
+          : record.fingerTargets,
+      completedFingers: [...record.completedFingers, classification.finger],
+      basicResults:
+        record.tier === "basic"
+          ? [
+              ...record.basicResults,
+              {
+                finger: classification.finger,
+                type: classification.type,
+                confidence: classification.confidence,
+                notes: classification.notes,
+                abilityTitle: report.abilityTitle
+              }
+            ]
+          : record.basicResults
+    }));
+
+    if (!updatedSession) {
+      throw new Error("Unable to persist scan session progress.");
+    }
 
     logRoute("info", "Loaded report for classification", {
       requestId,
@@ -405,7 +512,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({
       ok: true,
       classification,
-      report
+      report,
+      session: toScanSessionSummary(updatedSession)
     });
   } catch (error) {
     logRoute("error", "Unhandled classify route failure", {

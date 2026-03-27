@@ -9,6 +9,8 @@ const SESSION_DURATION_MS = 1000 * 60 * 60 * 8;
 export interface AccessSessionPayload {
   tier: AccessTier;
   tokenPrefix: string | null;
+  tokenRecordId: number | null;
+  scanSessionId: string;
   expiresAt: number;
 }
 
@@ -55,6 +57,17 @@ export function verifyAccessSessionValue(value: string | undefined): AccessSessi
     ) as AccessSessionPayload;
 
     if (!["free", "basic", "premium"].includes(parsed.tier)) {
+      return null;
+    }
+
+    if (typeof parsed.scanSessionId !== "string" || !parsed.scanSessionId.trim()) {
+      return null;
+    }
+
+    if (
+      parsed.tokenRecordId !== null &&
+      (typeof parsed.tokenRecordId !== "number" || !Number.isFinite(parsed.tokenRecordId))
+    ) {
       return null;
     }
 
