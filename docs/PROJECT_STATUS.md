@@ -1,307 +1,287 @@
-# DMIT Fingerprint Scanner - Flow And Implementation Status
+# DMIT Fingerprint Scanner - Current Status
 
 ## Purpose
 
-This document captures:
+This document reflects the **current implemented state** of the DMIT frontend and admin system.
 
-- the intended product rules from the technical documentation screenshots
-- the flow currently implemented in this repository
-- what has been completed
+It captures:
+
+- what is already working
+- what is partially done
 - what is still missing
-- the recommended next build order
+- the practical next steps
 
-## Current Repository Summary
+## Repositories
 
-The current repository is **not yet the full tier-based product** described in the technical documentation.
+### Frontend App
 
-It is currently a **working DMIT prototype / 4-finger demo** with:
+Repository: `dmit-token-frontend`
 
-- a mobile-first Next.js UI
-- camera capture and image upload
-- Gemini-based fingerprint classification
-- local reference fingerprint dataset loading
-- local report text rendering in-app
+Purpose:
 
-It does **not** yet implement the full tier model, token system, premium cloud upload flow, or the required black-and-white preprocessing pipeline.
+- public scanner UI
+- token-gated access flow
+- Free / Basic / Premium tier handling
+- scan session lifecycle
+- DMIT report rendering
 
-## Target Product Rules
+### Admin App
 
-### 1. Access Tiers
+Repository: `dmit-token-admin`
 
-The app is intended to support **3 tiers**.
+Purpose:
 
-#### Free Trial
+- create tokens
+- list tokens
+- revoke tokens
 
-- No token required
-- User skips token entry
-- User scans **1 finger only**
-- Allowed finger choices: **Index** or **Thumb**
-- AI generates a **basic DMIT report**
-- Report is displayed in-app
+## Overall Status
 
-#### Basic Plan
+The project is now beyond the original demo state.
 
-- User enters a valid **Basic token**
-- User scans **4 specific fingers**
-- Finger set: **Left Thumb, Right Thumb, Left Index, Right Index**
-- AI analyzes scans against the reference dataset
-- Full DMIT report is displayed in-app
+It currently has:
 
-#### Premium Plan
+- token-based tier access
+- tier-driven scan flow
+- server-backed scan session lifecycle
+- Basic and Premium token consumption rules
+- Basic bundled in-app reporting
+- a separate admin web app for token management
 
-- User enters a valid **Premium token**
-- User scans **10 fingers**
-- All fingers on both hands are captured
-- **No AI processing**
-- Images are uploaded to **cloud storage**
-- Lab team handles analysis manually
+The biggest remaining product gap is now:
 
-### 2. Scanning Rules
+- **real Premium cloud upload and manual lab handoff**
 
-The scanning flow is intended to be step-by-step and tier-driven.
+## What Is Working
 
-#### Finger Counts By Tier
+### 1. Project Setup
 
-- Free Tier: **1 finger**
-- Basic Tier: **4 fingers**
-- Premium Tier: **10 fingers**
+Status: `Done`
 
-#### Free Tier Finger Selection Rule
+- frontend repo is running and building
+- admin repo is running and building
+- local environment is configured
+- both repos are under your GitHub account
 
-- The user must choose **one finger** before scanning
-- Only two options are allowed:
-  - **Index Finger**
-  - **Thumb**
-- The UI should present these as a simple 2-button selection screen before camera activation
-- No other fingers should be available in Free tier
+### 2. Token System
 
-#### Required Per-Finger Flow
+Status: `Done for app flow`
 
-1. Prompt the user to select or place a specific finger
-2. Capture the fingerprint image using the device camera
-3. Convert the image to **high-contrast black-and-white**
-4. Repeat automatically until the required finger count is complete
+Implemented:
 
-#### Finger Prompting Rule
+- token validation against NoCodeBackend
+- Free access with no token
+- Basic token flow
+- Premium token flow
+- secure server-side access session cookie
+- scan session creation at access resolution
+- token use is consumed on **successful completion**, not on token entry
+- reusable token behavior through `remaining_uses`
+- token moves effectively to `used` when remaining uses reach zero
 
-- Free tier: the user picks **Index** or **Thumb**
-- Basic and Premium: the app dictates the order
-- The UI should clearly label the current finger, for example: `Left Thumb`
+Admin side implemented:
 
-## Current Flow Implemented In This Repo
+- token generation web app
+- list/search tokens
+- revoke tokens
 
-Today, the repository behaves as a **single-finger-at-a-time 4-finger demo**.
+### 3. Scanner Flow
 
-### Frontend Flow
+Status: `Mostly done`
 
-1. The user opens the home screen
-2. The user selects one finger from a dropdown:
-   - Left Thumb
-   - Right Thumb
-   - Left Index
-   - Right Index
-3. The user captures an image using:
-   - live camera preview, or
-   - native camera / gallery upload
-4. The app sends the selected finger and captured image to `/api/classify`
-5. If classification succeeds, the app redirects to `/report`
-6. The report is displayed in-app
+Implemented:
 
-### Backend Flow
-
-1. The API validates the selected finger and uploaded image
-2. The image is written to a temporary file
-3. The classifier uploads:
-   - the captured image
-   - 10 reference fingerprint images
-4. Gemini is asked to return:
-   - finger
-   - type
-   - confidence
-   - notes
-5. The backend retries classification with lower thresholds if confidence is weak
-6. The app loads the report text from the local dataset
-7. The report is returned to the frontend and rendered
-
-### Important Characterization Of Current Behavior
-
-The current app does **not** behave like Free, Basic, or Premium exactly.
-
-Instead, it is best described as:
-
-- a **4-finger demo prototype**
-- one scan at a time
-- AI-based classification
-- in-app report rendering
-
-## Status Against Sections 1 To 6
-
-### 1. Project Setup & Codebase Review
-
-**Status:** Mostly done
-
-#### What is done
-
-- Repository exists and is runnable locally
-- Dependencies install successfully
-- Typecheck and build have been verified locally
-- Core folder structure is established
-- The codebase has a clear Next.js App Router structure
-
-#### What is not done
-
-- Correct public deployment of the real app is not finalized
-- The deployed Netlify URL previously reviewed did not appear to be this actual app
-
-### 2. Token System Integration
-
-**Status:** Not done
-
-#### What is done
-
-- Nothing substantial in the current codebase
-
-#### What is missing
-
-- Token entry screen
-- Token validation
-- External database integration
-- Tier routing based on token type
-- Session or app state for active tier
-
-### 3. Camera & Fingerprint Scanning
-
-**Status:** Partially done
-
-#### What is done
-
-- Camera capture UI exists
-- Native camera / gallery upload exists
-- Finger selection exists
-- The UI can label and submit one selected finger at a time
-- The current demo supports these four fingers:
+- mobile-first camera capture
+- native camera / upload fallback
+- Free tier finger chooser:
+  - Thumb
+  - Index
+- Basic guided 4-finger order:
   - Left Thumb
   - Right Thumb
   - Left Index
   - Right Index
+- Premium guided 10-finger order:
+  - Left Thumb
+  - Left Index
+  - Left Middle
+  - Left Ring
+  - Left Little
+  - Right Thumb
+  - Right Index
+  - Right Middle
+  - Right Ring
+  - Right Little
+- server-side enforcement of scan order
+- server-side progress persistence
+- high-contrast black-and-white preprocessing before analysis or capture save
 
-#### What is missing
+### 4. AI / Dataset Flow
 
-- No tier-driven scan count
-- No Free-tier 2-button finger chooser limited to Index / Thumb
-- No automatic dictated scan order for Basic / Premium
-- No 10-finger Premium flow
-- No high-contrast B&W preprocessing
-- No automatic multi-step progression until all required fingers are scanned
+Status: `Done for Free and Basic`
 
-### 4. AI Integration & Reference Dataset
+Implemented:
 
-**Status:** Partially done and closest to complete
+- Gemini classification flow
+- retry/fallback classification logic
+- local DMIT report dataset loading
+- type-image lookup route
+- Free single-finger report flow
+- Basic 4-finger guided AI flow
 
-#### What is done
+Important note:
 
-- Local reference fingerprint dataset exists
-- Local report text dataset exists
-- Gemini integration exists
-- Classification retry logic exists
-- Reports are rendered in-app
-- The type image route exists
+- report text is still loaded from the local dataset, not generated from scratch by AI
 
-#### What is missing
+### 5. Basic Reporting
 
-- The product spec says AI should generate DMIT reporting for some tiers, but this repo currently loads prewritten report text from the local dataset
-- No tier-based branching of AI behavior
-- Premium rule says no AI processing, but the repo currently has no Premium-specific path
+Status: `Done`
 
-### 5. Cloud Storage Upload (Premium)
+Implemented:
 
-**Status:** Not done
+- per-finger Basic result tracking
+- Basic combined in-app report page
+- single bundled Basic review surface
+- PDF/export surface for bundled report
 
-#### What is done
+### 6. Premium Manual Capture Flow
 
-- Nothing substantial in the current codebase
+Status: `Partially done`
 
-#### What is missing
+Implemented:
 
-- Cloud storage provider integration
-- Upload workflow for all 10 Premium images
-- Premium-only upload rules
-- Upload success confirmation flow
-- Manual lab-processing handoff flow
+- 10-finger guided Premium capture sequence
+- processed image saving during capture
+- session completion flow
+- token consumption after successful Premium completion
 
-### 6. Testing, Polish & Delivery
+Current storage behavior:
 
-**Status:** Partially done
+- Premium captures are saved **locally in app runtime storage**
+- they are **not yet uploaded to cloud storage**
 
-#### What is done
+## What Is Still Missing
 
-- Local development run works
-- Mobile test via Cloudflare Tunnel was completed
-- The UI is presentable and functional for the demo scope
-- The app can complete a full request/response path when image quality is sufficient
+### 1. Premium Cloud Upload
 
-#### What is missing
+Status: `Not done`
 
-- Full end-to-end testing across all 3 tiers
-- Production deployment validation
-- Real token flow testing
-- Premium manual-processing flow testing
-- Final UX polish for a tier-driven onboarding / scanning experience
+Still needed:
 
-## Completed vs Missing Summary
+- choose a cloud storage provider
+- upload the 10 processed Premium captures to cloud
+- store cloud file references
+- replace local-only runtime storage as the final Premium storage path
 
-### Completed Or Mostly Completed
+### 2. Premium Manual Lab Handoff
 
-- Next.js project setup
-- Local dev/build workflow
-- Mobile-first scanner UI
-- Single-image camera capture
-- 4-finger demo selection
-- Gemini classification integration
-- Local dataset loading
-- In-app report rendering
+Status: `Not done`
 
-### Missing Or Incomplete
+Still needed:
 
-- Token system
-- Tier logic
-- Free / Basic / Premium flow separation
-- 1-finger Free flow
-- 10-finger Premium flow
-- Automatic step-by-step scan sequencing
-- High-contrast B&W processing
-- Cloud storage upload
-- Manual lab handoff process
-- Final production deployment of the correct app
+- create a real manual-processing job/handoff record
+- expose job status or confirmation
+- define what the lab team receives and where
 
-## Main Gap
+### 3. Production Deployment
 
-The biggest gap is that the repository currently implements a **demo classification app**, while the product documentation defines a **tier-based fingerprint workflow product**.
+Status: `Not done`
 
-That means the missing work is not just bug-fixing. It requires a product-flow expansion:
+Still needed:
 
-- token-driven access
-- tier-driven scanning rules
-- image preprocessing rules
-- premium cloud upload rules
+- deploy frontend app publicly
+- deploy admin app publicly or internally
+- configure production environment variables
+- validate mobile camera behavior on production HTTPS
 
-## Recommended Next Build Order
+### 4. Full End-to-End QA
 
-1. Define the final tier rules in code terms
-2. Implement token entry and token validation
-3. Store the resolved tier in app state
-4. Refactor the scanner so the number of fingers depends on tier
-5. Add the required scan ordering rules
-6. Add high-contrast B&W preprocessing
-7. Keep the existing AI/report pipeline for Free and Basic where applicable
-8. Add Premium cloud upload and manual handoff flow
-9. Run end-to-end testing across all tiers
-10. Deploy the actual app publicly and verify the live build
+Status: `Not done`
 
-## Practical Conclusion
+Still needed:
 
-If this project is judged against the technical documentation screenshots, the current repository should be considered:
+- full real-device testing across Free / Basic / Premium
+- production verification
+- repeat-use token testing in production-like flow
+- Premium upload/handoff testing once cloud storage exists
 
-- **working as a prototype**
-- **partially complete**
-- **not yet aligned with the full tiered product specification**
+## Scanner And Image Saving - Current Reality
+
+### Scanner
+
+The scanner is **working**, but not fully finished from a product-hardening perspective.
+
+Already done:
+
+- guided tier-based flow
+- live camera and upload capture
+- current finger labeling
+- step-by-step progression
+- preprocessing to high-contrast black-and-white
+
+Still worth improving later:
+
+- better capture quality guidance
+- stronger blur / exposure validation before analysis
+- better UX around recapture and image quality feedback
+- production mobile testing across more devices
+
+### Image Saving
+
+This is the area that is **not fully finished**.
+
+Current behavior:
+
+- Free and Basic captures are processed and used for classification flow
+- Premium captures are saved locally in runtime storage during the session
+
+What is still missing:
+
+- real persistent cloud storage for Premium
+- permanent saved file references
+- manual lab handoff integration
+- final retention / cleanup rules for uploaded captures
+
+So yes: there is still real work left around **image saving**, specifically for Premium.
+
+## Practical Done vs Missing Summary
+
+### Done
+
+- token system in frontend
+- token admin app
+- tier routing
+- Free flow
+- Basic guided flow
+- Premium guided capture flow
+- scan session lifecycle
+- completion-based token consumption
+- high-contrast preprocessing
+- Basic combined report
+
+### Missing
+
+- Premium cloud upload
+- Premium manual lab handoff backend
+- production deployment
+- full production-grade QA and polish
+
+## Recommended Next Steps
+
+1. Choose the Premium cloud storage target
+2. Implement Premium upload from runtime save path to cloud
+3. Create manual handoff/job records after Premium completion
+4. Deploy frontend and admin apps
+5. Run full end-to-end testing on mobile devices
+
+## Conclusion
+
+The token system, tier flow, scanner flow, and Basic reporting are now in place.
+
+The project is no longer blocked on access control or core scanner behavior.
+
+The main remaining product work is:
+
+- **Premium storage**
+- **Premium manual processing handoff**
+- **deployment and final QA**
