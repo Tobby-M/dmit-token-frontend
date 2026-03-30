@@ -8,6 +8,30 @@ interface CameraCaptureProps {
   disabled?: boolean;
 }
 
+function getFriendlyCameraError(error: unknown): string {
+  if (error instanceof DOMException) {
+    switch (error.name) {
+      case "NotAllowedError":
+      case "PermissionDeniedError":
+        return "Camera permission was denied. Allow camera access in the browser, or use Native Camera / Upload instead.";
+      case "NotFoundError":
+      case "DevicesNotFoundError":
+        return "No rear camera was found on this device. Use Native Camera / Upload instead.";
+      case "NotReadableError":
+      case "TrackStartError":
+        return "The camera is already in use by another app or browser tab. Close it there first, or use Native Camera / Upload.";
+      case "OverconstrainedError":
+        return "This browser could not satisfy the requested camera settings. Use Native Camera / Upload instead.";
+      case "SecurityError":
+        return "The browser blocked live camera access in this context. Use Native Camera / Upload instead.";
+      default:
+        return error.message || "Unable to access the camera on this device.";
+    }
+  }
+
+  return error instanceof Error ? error.message : "Unable to access the camera on this device.";
+}
+
 export function CameraCapture({ onCapture, disabled = false }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -90,9 +114,7 @@ export function CameraCapture({ onCapture, disabled = false }: CameraCaptureProp
         setCameraReady(true);
         setCameraError(null);
       } catch (error) {
-        setCameraError(
-          error instanceof Error ? error.message : "Unable to access camera on this device"
-        );
+        setCameraError(getFriendlyCameraError(error));
         setCameraReady(false);
       }
     };
@@ -216,7 +238,7 @@ export function CameraCapture({ onCapture, disabled = false }: CameraCaptureProp
       </div>
 
       <p className="flex items-center justify-center gap-2 text-sm font-medium text-ink/80">
-        <Idea01Icon className="h-5 w-5 text-pine" /> For best results, ensure the fingerprint lines (ridges and valleys) are clearly visible and the image is in focus.
+        <Idea01Icon className="h-5 w-5 text-pine" /> Keep the fingertip flat, fill most of the frame, and make sure the ridges look dark and in focus. If glare washes the print out, switch to Native Camera / Upload.
       </p>
 
       {mode === "live" ? (
@@ -246,12 +268,17 @@ export function CameraCapture({ onCapture, disabled = false }: CameraCaptureProp
           <div className="rounded-xl bg-white/70 p-3 text-sm text-ink/80">
             {!cameraReady && !cameraError ? "Starting camera..." : null}
             {cameraError ? `Camera error: ${cameraError}` : null}
-            {cameraReady && torchSupported && torchEnabled ? "Flash requested: ON. " : null}
+            {cameraReady && torchSupported && torchEnabled
+              ? "Camera ready. Flash requested: ON. Tap the preview if the ridges need more focus or lower exposure. "
+              : null}
             {cameraReady && focusState ? (
               <span className="font-semibold text-pine">{focusState}</span>
             ) : null}
             {cameraReady && !torchSupported && !focusState
-              ? "Flash is not supported on this device."
+              ? "Camera ready. Flash is not supported on this device, so use brighter ambient light if the ridges look faint."
+              : null}
+            {cameraReady && torchSupported && !torchEnabled && !focusState
+              ? "Camera ready. If the print still looks washed out, try tapping the preview or switch to Native Camera / Upload."
               : null}
           </div>
 

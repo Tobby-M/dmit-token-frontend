@@ -46,10 +46,131 @@ interface AccessResolveResponse {
   session: PublicAccessSession;
 }
 
+interface ApiErrorPayload {
+  error?: string;
+  details?: string;
+  recaptureRequired?: boolean;
+}
+
+interface FailureFeedback {
+  message: string;
+  guidance: string | null;
+}
+
+function cleanFailureDetails(details?: string): string | null {
+  if (!details) {
+    return null;
+  }
+
+  const normalized = details
+    .replace(/^Low confidence classification\s*\([^)]+\)\.?\s*/i, "")
+    .replace(/^Notes:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized || null;
+}
+
+function getRecaptureGuidance(
+  currentFinger: string | null,
+  tier: PublicAccessSession["tier"] | null
+): string {
+  const fingerLabel = currentFinger ?? "the highlighted finger";
+
+  if (tier === "premium") {
+    return `Recapture ${fingerLabel} with the fingertip centered, evenly lit, and fully in frame before saving again. If the live preview keeps washing it out, switch to Native Camera / Upload.`;
+  }
+
+  return `Recapture ${fingerLabel} with the ridges dark, sharp, and centered in frame. If the live preview keeps washing it out, switch to Native Camera / Upload before analyzing again.`;
+}
+
+function describeScannerFailure(
+  payload: ApiErrorPayload,
+  options: {
+    currentFinger: string | null;
+    tier: PublicAccessSession["tier"] | null;
+    fallbackMessage: string;
+  }
+): FailureFeedback {
+  const message = payload.error?.trim() || options.fallbackMessage;
+  const detail = cleanFailureDetails(payload.details);
+
+  if (payload.recaptureRequired) {
+    return {
+      message:
+        options.currentFinger !== null
+          ? `${options.currentFinger} needs a cleaner capture before the scanner can continue.`
+          : message,
+      guidance: [detail, getRecaptureGuidance(options.currentFinger, options.tier)]
+        .filter(Boolean)
+        .join(" ")
+    };
+  }
+
+  if (/Capture .+ next to stay in(?: the)? (?:Basic )?sequence\./i.test(message)) {
+    return {
+      message,
+      guidance:
+        "The scanner only unlocks one finger at a time. Follow the highlighted order so the Basic session stays valid."
+    };
+  }
+
+  if (/locked to/i.test(message) || /Free Trial only supports/i.test(message)) {
+    return {
+      message,
+      guidance:
+        "Free Trial only supports the Thumb or Index choice you selected at the start of the session."
+    };
+  }
+
+  if (/Finger mismatch detected/i.test(message)) {
+    return {
+      message,
+      guidance:
+        "Retake the same finger shown in the Current Finger panel. Switching fingers mid-step invalidates the current scan."
+    };
+  }
+
+  if (
+    /Unsupported image type|Image file is empty|Image is too large|Fingerprint image file is required/i.test(
+      message
+    )
+  ) {
+    return {
+      message,
+      guidance:
+        "Use a clear JPG, PNG, or WEBP fingerprint image under 7 MB. If live capture keeps failing, switch to Native Camera / Upload."
+    };
+  }
+
+  if (/Premium scans do not use the live AI classification flow/i.test(message)) {
+    return {
+      message,
+      guidance:
+        "Premium only saves processed captures. Use Save instead of Analyze, then finalize after all 10 fingers are complete."
+    };
+  }
+
+  if (/Gemini|Classification service failed/i.test(message)) {
+    return {
+      message,
+      guidance:
+        detail ??
+        "The classifier service could not finish this request. Retry after another capture or check the server configuration if it keeps happening."
+    };
+  }
+
+  return {
+    message,
+    guidance: detail
+  };
+}
+
 export default function HomePage() {
   const router = useRouter();
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorGuidance, setErrorGuidance] = useState<string | null>(null);
   const [flowMessage, setFlowMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [processingCapture, setProcessingCapture] = useState(false);
@@ -105,20 +226,6 @@ export default function HomePage() {
     };
   }, []);
 
-  const previewText = useMemo(() => {
-    if (processingCapture) {
-      return "Processing capture into high-contrast black-and-white.";
-    }
-
-    if (!capturedImage) {
-      return "No capture yet.";
-    }
-
-    return accessSession?.tier === "premium"
-      ? "Processed Premium capture ready to save into the session."
-      : "Processed fingerprint ready for AI analysis.";
-  }, [accessSession?.tier, capturedImage, processingCapture]);
-
   const currentTierLabel = accessSession ? getTierLabel(accessSession.tier) : null;
   const currentScanSession = accessSession?.scanSession ?? null;
   const basicResults = currentScanSession?.basicResults ?? [];
@@ -140,6 +247,34 @@ export default function HomePage() {
 
     return accessSession.scanSession.nextFinger;
   }, [accessSession, freeFingerChoice]);
+
+  const previewText = useMemo(() => {
+    if (processingCapture) {
+      return "Processing capture into high-contrast black-and-white.";
+    }
+
+    if (!capturedImage) {
+      return currentFinger
+        ? `Capture ${currentFinger} to continue. The preview will switch to processed black-and-white before analysis or save.`
+        : "No capture yet.";
+    }
+
+    return accessSession?.tier === "premium"
+      ? "Processed Premium capture ready to save into the session."
+      : "Processed fingerprint ready for AI analysis.";
+  }, [accessSession?.tier, capturedImage, currentFinger, processingCapture]);
+
+  function clearScannerFeedback() {
+    setErrorMessage(null);
+    setErrorGuidance(null);
+    setFlowMessage(null);
+  }
+
+  function showScannerFailure(message: string, guidance?: string | null) {
+    setErrorMessage(message);
+    setErrorGuidance(guidance ?? null);
+    setFlowMessage(null);
+  }
 
   async function resolveAccess(token: string) {
     setAccessPending(true);
@@ -164,6 +299,7 @@ export default function HomePage() {
       setAccessState("ready");
       setCapturedImage(null);
       setErrorMessage(null);
+      setErrorGuidance(null);
       setFlowMessage(null);
       setProcessingCapture(false);
       setFreeFingerChoice("thumb");
@@ -187,6 +323,7 @@ export default function HomePage() {
       setAccessState("gated");
       setCapturedImage(null);
       setErrorMessage(null);
+      setErrorGuidance(null);
       setFlowMessage(null);
       setLoading(false);
       setProcessingCapture(false);
@@ -243,23 +380,28 @@ export default function HomePage() {
 
   async function analyzeCapture() {
     if (!capturedImage) {
-      setErrorMessage("Capture a fingerprint image first.");
+      showScannerFailure(
+        "Capture a fingerprint image first.",
+        getRecaptureGuidance(currentFinger, accessSession?.tier ?? null)
+      );
       return;
     }
 
     if (!accessSession || !currentFinger) {
-      setErrorMessage("Resolve your access tier before starting a scan.");
+      showScannerFailure("Resolve your access tier before starting a scan.");
       return;
     }
 
     if (accessSession.tier === "premium") {
-      setErrorMessage("Premium flow does not use live AI analysis.");
+      showScannerFailure(
+        "Premium flow does not use live AI analysis.",
+        "Use Save to store the processed capture, then finalize after all 10 fingers are complete."
+      );
       return;
     }
 
     setLoading(true);
-    setErrorMessage(null);
-    setFlowMessage(null);
+    clearScannerFeedback();
 
     try {
       const imageBlob = dataUrlToBlob(capturedImage);
@@ -272,14 +414,18 @@ export default function HomePage() {
         body: formData
       });
 
-      const payload = (await response.json()) as ScanResponse | { error?: string; details?: string };
+      const payload = (await response.json()) as ScanResponse | ApiErrorPayload;
       if (!response.ok || !("ok" in payload)) {
-        const details = "details" in payload && payload.details ? ` ${payload.details}` : "";
-        throw new Error(("error" in payload && payload.error) || `Classification failed.${details}`);
+        throw describeScannerFailure(payload as ApiErrorPayload, {
+          currentFinger,
+          tier: accessSession.tier,
+          fallbackMessage: "Failed to classify fingerprint."
+        });
       }
 
       updateScanSession(payload.session);
       setCapturedImage(null);
+      setErrorGuidance(null);
 
       if (accessSession.tier === "free") {
         await finalizeCurrentSession();
@@ -305,7 +451,14 @@ export default function HomePage() {
           : `${payload.classification.finger} complete.`
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to classify fingerprint.");
+      if (error && typeof error === "object" && "message" in error && "guidance" in error) {
+        const feedback = error as FailureFeedback;
+        showScannerFailure(feedback.message, feedback.guidance);
+      } else {
+        showScannerFailure(
+          error instanceof Error ? error.message : "Failed to classify fingerprint."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -313,18 +466,20 @@ export default function HomePage() {
 
   async function savePremiumCapture() {
     if (!capturedImage) {
-      setErrorMessage("Capture a fingerprint image first.");
+      showScannerFailure(
+        "Capture a fingerprint image first.",
+        getRecaptureGuidance(currentFinger, accessSession?.tier ?? null)
+      );
       return;
     }
 
     if (!accessSession || accessSession.tier !== "premium" || !currentFinger) {
-      setErrorMessage("Resolve a Premium session before saving captures.");
+      showScannerFailure("Resolve a Premium session before saving captures.");
       return;
     }
 
     setLoading(true);
-    setErrorMessage(null);
-    setFlowMessage(null);
+    clearScannerFeedback();
 
     try {
       const imageBlob = dataUrlToBlob(capturedImage);
@@ -337,13 +492,18 @@ export default function HomePage() {
         body: formData
       });
 
-      const payload = (await response.json()) as SessionMutationResponse | { error?: string };
+      const payload = (await response.json()) as SessionMutationResponse | ApiErrorPayload;
       if (!response.ok || !("ok" in payload)) {
-        throw new Error(("error" in payload && payload.error) || "Unable to save Premium capture.");
+        throw describeScannerFailure(payload as ApiErrorPayload, {
+          currentFinger,
+          tier: accessSession.tier,
+          fallbackMessage: "Unable to save Premium capture."
+        });
       }
 
       updateScanSession(payload.session);
       setCapturedImage(null);
+      setErrorGuidance(null);
 
       if (payload.session.readyForCompletion) {
         await finalizeCurrentSession({
@@ -359,7 +519,14 @@ export default function HomePage() {
           : `${currentFinger} saved.`
       );
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to save Premium capture.");
+      if (error && typeof error === "object" && "message" in error && "guidance" in error) {
+        const feedback = error as FailureFeedback;
+        showScannerFailure(feedback.message, feedback.guidance);
+      } else {
+        showScannerFailure(
+          error instanceof Error ? error.message : "Unable to save Premium capture."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -567,6 +734,7 @@ export default function HomePage() {
                         setFreeFingerChoice(option.value);
                         setCapturedImage(null);
                         setErrorMessage(null);
+                        setErrorGuidance(null);
                         setFlowMessage(null);
                       }}
                       className={`rounded-2xl border px-4 py-4 text-left transition ${
@@ -669,23 +837,38 @@ export default function HomePage() {
                 </div>
               </section>
 
+              <section className="rounded-2xl border border-brass/30 bg-white p-4 shadow-card">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-pine">
+                  Capture Checklist
+                </p>
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-ink/78">
+                  <li>Center {currentFinger ?? "the highlighted finger"} and fill most of the frame.</li>
+                  <li>Keep the fingertip steady so the ridges stay dark and sharp.</li>
+                  <li>Avoid bright flash hotspots. If the preview looks washed out, switch to Native Camera / Upload.</li>
+                </ul>
+              </section>
+
               <CameraCapture
                 disabled={loading || processingCapture || !currentFinger}
                 onCapture={async (imageDataUrl) => {
                   setProcessingCapture(true);
                   setErrorMessage(null);
+                  setErrorGuidance(null);
                   setFlowMessage(null);
 
                   try {
                     const processedImage = await toHighContrastFingerprint(imageDataUrl);
                     setCapturedImage(processedImage);
-                    setFlowMessage("Capture processed to high-contrast black-and-white.");
+                    setFlowMessage(
+                      "Capture processed to high-contrast black-and-white. Confirm the ridges look dark and readable before continuing."
+                    );
                   } catch (error) {
                     setCapturedImage(imageDataUrl);
-                    setErrorMessage(
+                    showScannerFailure(
                       error instanceof Error
                         ? error.message
-                        : "Unable to process the captured fingerprint image."
+                        : "Unable to process the captured fingerprint image.",
+                      "Retake the fingerprint with better contrast, or switch to Native Camera / Upload if processing keeps failing."
                     );
                   } finally {
                     setProcessingCapture(false);
@@ -719,7 +902,7 @@ export default function HomePage() {
                             ? "Premium session finalized and token usage updated."
                             : "Basic session finalized and token usage updated."
                       }).catch((error) => {
-                        setErrorMessage(
+                        showScannerFailure(
                           error instanceof Error ? error.message : "Unable to finalize the scan."
                         );
                       })
@@ -751,7 +934,14 @@ export default function HomePage() {
                   </button>
                 )}
 
-                {errorMessage ? <p className="text-sm text-red-700">{errorMessage}</p> : null}
+                {errorMessage ? (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <p className="font-semibold">{errorMessage}</p>
+                    {errorGuidance ? (
+                      <p className="mt-1 leading-6 text-red-700/90">{errorGuidance}</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {flowMessage ? <p className="text-sm text-pine">{flowMessage}</p> : null}
               </section>
             </>

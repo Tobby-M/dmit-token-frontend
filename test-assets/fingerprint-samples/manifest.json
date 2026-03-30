@@ -1,0 +1,82 @@
+{
+  "verifiedOn": "2026-03-30",
+  "sourcePack": "C:\\Users\\Theo\\Downloads\\4 Fingers 10 Type\\4 Fingers 10 Type",
+  "samples": {
+    "CPW": "sample-cpw.jpg",
+    "CW": "sample-cw.jpg",
+    "DL": "sample-dl.jpg",
+    "PE": "sample-pe.png",
+    "PW": "sample-pw.jpg",
+    "RL": "sample-rl.jpg",
+    "SA": "sample-sa.jpg",
+    "SW": "sample-sw.jpg",
+    "TA": "sample-ta.jpg",
+    "UL": "sample-ul.jpg"
+  },
+  "free": [
+    {
+      "finger": "Left Thumb",
+      "sample": "sample-rl.jpg"
+    }
+  ],
+  "basic": [
+    {
+      "finger": "Left Thumb",
+      "sample": "sample-cpw.jpg"
+    },
+    {
+      "finger": "Right Thumb",
+      "sample": "sample-cw.jpg"
+    },
+    {
+      "finger": "Left Index",
+      "sample": "sample-dl.jpg"
+    },
+    {
+      "finger": "Right Index",
+      "sample": "sample-pe.png"
+    }
+  ],
+  "premium": [
+    {
+      "finger": "Left Thumb",
+      "sample": "sample-cpw.jpg"
+    },
+    {
+      "finger": "Left Index",
+      "sample": "sample-cw.jpg"
+    },
+    {
+      "finger": "Left Middle",
+      "sample": "sample-dl.jpg"
+    },
+    {
+      "finger": "Left Ring",
+      "sample": "sample-pe.png"
+    },
+    {
+      "finger": "Left Little",
+      "sample": "sample-pw.jpg"
+    },
+    {
+      "finger": "Right Thumb",
+      "sample": "sample-rl.jpg"
+    },
+    {
+      "finger": "Right Index",
+      "sample": "sample-sa.jpg"
+    },
+    {
+      "finger": "Right Middle",
+      "sample": "sample-sw.jpg"
+    },
+    {
+      "finger": "Right Ring",
+      "sample": "sample-ta.jpg"
+    },
+    {
+      "finger": "Right Little",
+      "sample": "sample-ul.jpg"
+    }
+  ]
+}
