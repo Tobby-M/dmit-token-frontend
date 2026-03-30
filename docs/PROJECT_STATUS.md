@@ -116,9 +116,7 @@ Implemented:
 - server-side progress persistence
 - high-contrast black-and-white preprocessing before analysis or capture save
 - clearer scanner-side failure guidance and recapture messaging
-- verified locally against the Downloads sample pack:
-  - `4 Fingers 10 Type/Image/Screenshots`
-  - `4 Fingers 10 Type/Image/Fingerprints`
+- verified locally against the bundled development fingerprint fixtures in `test-assets/fingerprint-samples`
 
 ### 4. AI / Dataset Flow
 
@@ -204,7 +202,7 @@ Status: `Partially done`
 
 Done:
 
-- local scanner verification against the Downloads sample pack
+- local scanner verification against the bundled development fingerprint fixtures
 - Free scan completed end-to-end
 - Basic 4-finger scan completed end-to-end
 - Premium 10-finger capture sequence completed end-to-end
@@ -230,7 +228,7 @@ Already done:
 - step-by-step progression
 - preprocessing to high-contrast black-and-white
 - clearer recovery messaging when a scan fails
-- local verification against the Downloads fingerprint sample pack
+- local verification against the bundled development fingerprint fixtures
 
 Still worth improving later:
 

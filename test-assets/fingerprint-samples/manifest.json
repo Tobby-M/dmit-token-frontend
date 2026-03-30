@@ -1,6 +1,6 @@
 {
   "verifiedOn": "2026-03-30",
-  "sourcePack": "C:\\Users\\Theo\\Downloads\\4 Fingers 10 Type\\4 Fingers 10 Type",
+  "source": "bundled development verification fixtures",
   "samples": {
     "CPW": "sample-cpw.jpg",
     "CW": "sample-cw.jpg",
@@ -13,6 +13,9 @@
     "TA": "sample-ta.jpg",
     "UL": "sample-ul.jpg"
   },
+  "notes": [
+    "sample-pe.png is a reference fingerprint fixture because no PE screenshot fixture was available during verification."
+  ],
   "free": [
     {
       "finger": "Left Thumb",
