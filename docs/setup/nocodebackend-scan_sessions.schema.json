@@ -1,0 +1,61 @@
+{
+  "table": "scan_sessions",
+  "purpose": "Persistent scan-session store for Free, Basic, and Premium flows",
+  "notes": [
+    "Use a long-text field for record_json.",
+    "If NoCodeBackend names it differently, choose the largest text field available."
+  ],
+  "columns": [
+    {
+      "name": "session_id",
+      "type": "varchar",
+      "params": 255,
+      "notes": "Stable app session id"
+    },
+    {
+      "name": "tier",
+      "type": "varchar",
+      "params": 255,
+      "allowedValues": ["free", "basic", "premium"]
+    },
+    {
+      "name": "status",
+      "type": "varchar",
+      "params": 255,
+      "allowedValues": ["active", "completed", "abandoned"]
+    },
+    {
+      "name": "token_prefix",
+      "type": "varchar",
+      "params": 255,
+      "notes": "Nullable token prefix"
+    },
+    {
+      "name": "token_record_id",
+      "type": "varchar",
+      "params": 255,
+      "notes": "Nullable token id reference stored as string for compatibility"
+    },
+    {
+      "name": "record_json",
+      "type": "text",
+      "notes": "Serialized full scan-session record"
+    }
+  ],
+  "recordJsonContains": [
+    "id",
+    "tier",
+    "status",
+    "tokenPrefix",
+    "tokenRecordId",
+    "createdAt",
+    "updatedAt",
+    "completedAt",
+    "requiredFingerCount",
+    "fingerTargets",
+    "completedFingers",
+    "basicResults",
+    "premiumCaptures",
+    "redemption"
+  ]
+}

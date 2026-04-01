@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -10,63 +8,13 @@ import {
   updateScanSessionRecord
 } from "@/lib/access/scan-session-store";
 import { readAccessSession } from "@/lib/access/session";
+import { persistPremiumCapture } from "@/lib/storage/premium-capture-storage";
 
 export const runtime = "nodejs";
 
 const captureRequestSchema = z.object({
   selectedFinger: z.string()
 });
-
-const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-
-function getImageExtension(mimeType: string): string {
-  switch (mimeType) {
-    case "image/png":
-      return "png";
-    case "image/webp":
-      return "webp";
-    case "image/jpeg":
-    default:
-      return "jpg";
-  }
-}
-
-function sanitizeFingerLabel(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}
-
-async function persistPremiumCapture(
-  sessionId: string,
-  selectedFinger: string,
-  file: File,
-  captureOrder: number
-) {
-  if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
-    throw new Error("Unsupported image type. Use JPEG, PNG, or WEBP.");
-  }
-
-  if (file.size <= 0) {
-    throw new Error("Image file is empty.");
-  }
-
-  if (file.size > 7_000_000) {
-    throw new Error("Image is too large. Please capture again.");
-  }
-
-  const extension = getImageExtension(file.type);
-  const directoryPath = path.join(process.cwd(), ".runtime", "premium-captures", sessionId);
-  await fs.mkdir(directoryPath, { recursive: true });
-
-  const fileName = `${String(captureOrder).padStart(2, "0")}-${sanitizeFingerLabel(selectedFinger)}.${extension}`;
-  const storagePath = path.join(directoryPath, fileName);
-  const bytes = Buffer.from(await file.arrayBuffer());
-  await fs.writeFile(storagePath, bytes);
-
-  return {
-    fileName,
-    storagePath
-  };
-}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const cookieStore = await cookies();
@@ -162,6 +110,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           processed: true,
           capturedAt,
           fileName: persisted.fileName,
+          storageProvider: persisted.storageProvider,
+          storageKey: persisted.storageKey,
+          storageUrl: persisted.storageUrl,
           storagePath: persisted.storagePath
         }
       ]

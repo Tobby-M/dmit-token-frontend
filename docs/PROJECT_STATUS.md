@@ -50,7 +50,7 @@ It currently has:
 
 The biggest remaining product gap is now:
 
-- **real Premium cloud upload and manual lab handoff**
+- **production configuration and Premium manual lab handoff**
 
 ## What Is Working
 
@@ -156,24 +156,35 @@ Implemented:
 - processed image saving during capture
 - session completion flow
 - token consumption after successful Premium completion
+- pluggable Premium storage backends:
+  - local filesystem for development
+  - Cloudinary for production
 
 Current storage behavior:
 
-- Premium captures are saved **locally in app runtime storage**
-- they are **not yet uploaded to cloud storage**
+- Premium captures default to **local app runtime storage** in development
+- Premium captures can be switched to **Cloudinary-backed storage** through production env config
 
 ## What Is Still Missing
 
-### 1. Premium Cloud Upload
+### 1. Production Storage Configuration
 
-Status: `Not done`
+Status: `Partially done`
+
+Implemented:
+
+- scan-session storage adapter for NoCodeBackend
+- Premium capture storage adapter for Cloudinary
+- environment-based mode switching between development and production storage backends
+- setup guide in `docs/STORAGE_SETUP.md`
 
 Still needed:
 
-- choose a cloud storage provider
-- upload the 10 processed Premium captures to cloud
-- store cloud file references
-- replace local-only runtime storage as the final Premium storage path
+- create the `scan_sessions` table in NoCodeBackend
+- set `SCAN_SESSION_STORE_MODE=nocodebackend`
+- configure Cloudinary credentials
+- set `PREMIUM_CAPTURE_STORAGE_MODE=cloudinary`
+- verify the production storage path end-to-end after configuration
 
 ### 2. Premium Manual Lab Handoff
 
@@ -238,19 +249,19 @@ Still worth improving later:
 
 ### Image Saving
 
-This is the area that is **not fully finished**.
+This is the area that is **implemented in code but not fully switched on for production yet**.
 
 Current behavior:
 
 - Free and Basic captures are processed and used for classification flow
-- Premium captures are saved locally in runtime storage during the session
+- Premium captures default to local runtime storage during development
+- Premium captures can upload to Cloudinary once production storage envs are configured
 
 What is still missing:
 
-- real persistent cloud storage for Premium
-- permanent saved file references
 - manual lab handoff integration
 - final retention / cleanup rules for uploaded captures
+- production storage configuration and verification
 
 So yes: there is still real work left around **image saving**, specifically for Premium.
 
@@ -271,18 +282,19 @@ So yes: there is still real work left around **image saving**, specifically for 
 
 ### Missing
 
-- Premium cloud upload
+- production storage configuration
 - Premium manual lab handoff backend
 - production deployment
 - full production-grade QA and polish
 
 ## Recommended Next Steps
 
-1. Choose the Premium cloud storage target
-2. Implement Premium upload from runtime save path to cloud
-3. Create manual handoff/job records after Premium completion
-4. Deploy frontend and admin apps
-5. Run full end-to-end testing on mobile devices
+1. Create the `scan_sessions` table in NoCodeBackend
+2. Add Cloudinary production credentials
+3. Switch storage modes in production env
+4. Create manual handoff/job records after Premium completion
+5. Deploy frontend and admin apps
+6. Run full end-to-end testing on mobile devices
 
 ## Conclusion
 
@@ -292,6 +304,6 @@ The project is no longer blocked on access control or core scanner behavior.
 
 The main remaining product work is:
 
-- **Premium storage**
+- **production storage configuration**
 - **Premium manual processing handoff**
 - **deployment and final QA**

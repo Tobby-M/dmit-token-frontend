@@ -2,6 +2,7 @@ export type AccessTier = "free" | "basic" | "premium";
 export type TokenTier = Exclude<AccessTier, "free">;
 export type TokenStatus = "active" | "used" | "revoked";
 export type ScanSessionStatus = "active" | "completed" | "abandoned";
+export type PremiumCaptureStorageProvider = "filesystem" | "cloudinary";
 
 export interface BasicScanResult {
   finger: string;
@@ -16,6 +17,9 @@ export interface PremiumCaptureSummary {
   processed: boolean;
   capturedAt: string;
   fileName: string | null;
+  storageProvider: PremiumCaptureStorageProvider | null;
+  storageKey: string | null;
+  storageUrl: string | null;
 }
 
 export interface ScanRedemptionSummary {

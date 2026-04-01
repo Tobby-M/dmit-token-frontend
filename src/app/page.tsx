@@ -1020,7 +1020,7 @@ export default function HomePage() {
                   Processed capture package is ready
                 </h2>
                 <p className="mt-3 text-sm leading-7 text-ink/72">
-                  All 10 processed Premium captures were stored locally for manual review. Live AI
+                  All 10 processed Premium captures were stored for manual review. Live AI
                   classification remains disabled for this tier.
                 </p>
               </div>

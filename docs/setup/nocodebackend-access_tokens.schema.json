@@ -1,0 +1,55 @@
+{
+  "table": "access_tokens",
+  "purpose": "Customer-facing Basic and Premium access tokens",
+  "columns": [
+    {
+      "name": "token_prefix",
+      "type": "varchar",
+      "params": 255,
+      "notes": "Searchable prefix such as BSC-ABC123 or PRM-XYZ789"
+    },
+    {
+      "name": "token_secret",
+      "type": "password",
+      "notes": "Secret token segment stored hashed"
+    },
+    {
+      "name": "tier",
+      "type": "varchar",
+      "params": 255,
+      "allowedValues": ["basic", "premium"]
+    },
+    {
+      "name": "status",
+      "type": "varchar",
+      "params": 255,
+      "allowedValues": ["active", "used", "revoked"]
+    },
+    {
+      "name": "remaining_uses",
+      "type": "int",
+      "notes": "Single-use tokens start at 1, reusable tokens can be higher"
+    },
+    {
+      "name": "expires_at",
+      "type": "varchar",
+      "params": 255,
+      "notes": "ISO timestamp string"
+    },
+    {
+      "name": "notes",
+      "type": "varchar",
+      "params": 255,
+      "notes": "Optional admin notes"
+    }
+  ],
+  "exampleRecord": {
+    "token_prefix": "BSC-ABC123",
+    "token_secret": "SECRET987",
+    "tier": "basic",
+    "status": "active",
+    "remaining_uses": 1,
+    "expires_at": "2026-12-31T23:59:59Z",
+    "notes": "Launch batch"
+  }
+}
